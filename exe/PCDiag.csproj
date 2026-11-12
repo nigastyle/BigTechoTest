@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>BigTechoTest</AssemblyName>
+    <RootNamespace>PCDiag</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <LangVersion>7.3</LangVersion>
+    <Version>1.1.0</Version>
+    <Product>Диагностика ПК</Product>
+    <AssemblyTitle>Диагностика ПК</AssemblyTitle>
+    <Description>Диагностика ПК и ноутбуков с HTML-отчётом</Description>
+    <Copyright>EQ</Copyright>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <EmbeddedResource Include="../pcdiag/PC-Diagnostika.cmd" LogicalName="payload.cmd" />
+  </ItemGroup>
+</Project>

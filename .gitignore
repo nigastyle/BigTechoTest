@@ -1,0 +1,21 @@
+# --- в репозитории только исходники программы BigTechoTest ---
+/*.ps1
+/winrun
+/shot.sh
+/sync-pc.sh
+/ycr_cmdlines.txt
+/runs/
+/shots/
+/ui-shots/
+/watch/*.log
+exe/obj/
+exe/out/
+exe/*.png
+pcdiag/PC-Diagnostika.cmd
+pcdiag/README_crlf.txt
+*.bak*
+*.tmp
+*.pem
+!btt-update-pub.pem
+secrets/
+*.key
