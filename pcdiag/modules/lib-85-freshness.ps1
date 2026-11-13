@@ -73,7 +73,7 @@ function Fresh-Nvidia($GpuName, $IsWin11) {
     $x = Fresh-Get "${base}?TypeID=2&ParentID=1"
     if (-not $x) { return $null }
     $series = @()
-    foreach ($m in [regex]::Matches($x, '<Name>([^<]+)</Name><Value>(\d+)</Value>')) {
+    foreach ($m in [regex]::Matches($x, '<Name>([^<]+)</Name>\s*<Value>(\d+)</Value>')) {
         $sn = $m.Groups[1].Value
         if ($sn -notmatch ('(?<!\d)' + $gen + '\s+Series')) { continue }
         $isNb = ($sn -match 'Notebook')
@@ -83,7 +83,7 @@ function Fresh-Nvidia($GpuName, $IsWin11) {
     foreach ($sr in $series) {
         $p = Fresh-Get "${base}?TypeID=3&ParentID=$($sr[1])"
         if (-not $p) { continue }
-        foreach ($m in [regex]::Matches($p, '<Name>([^<]+)</Name><Value>(\d+)</Value>')) {
+        foreach ($m in [regex]::Matches($p, '<Name>([^<]+)</Name>\s*<Value>(\d+)</Value>')) {
             if ((& $norm $m.Groups[1].Value) -eq $want) { $psid = $sr[1]; $pfid = $m.Groups[2].Value; break }
         }
         if ($pfid) { break }
@@ -100,6 +100,9 @@ function Fresh-Nvidia($GpuName, $IsWin11) {
     if ($dm.Success) { $res.Date = Fresh-ParseDate $dm.Groups[1].Value @('ddd MMM d, yyyy', 'ddd MMM dd, yyyy') }
     $um = [regex]::Match($j, '"DetailsURL"\s*:\s*"([^"]+)"')
     if ($um.Success) { $res.Url = $um.Groups[1].Value }
+    $res.DownloadUrl = $null   # прямая ссылка на DCH-установщик (нужна автоустановке lib-96-drvauto)
+    $dm2 = [regex]::Match($j, '"DownloadURL"\s*:\s*"([^"]+)"')
+    if ($dm2.Success) { $res.DownloadUrl = ($dm2.Groups[1].Value -replace '\\/', '/') }
     return $res
 }
 
@@ -125,7 +128,7 @@ function Fresh-AsusBios($Model) {
     try { $o = $j | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
     if (-not $o -or -not $o.Result -or -not $o.Result.Obj) { return $null }
     $files = @()
-    foreach ($grp in @($o.Result.Obj)) { if ($grp.Name -eq 'BIOS') { $files += @($grp.Files) } }
+    foreach ($grp in (AsArr $o.Result.Obj)) { if ($grp.Name -eq 'BIOS') { $files += (AsArr $grp.Files) } }
     $files = @($files | Where-Object { $_ -and $_.Version })
     if (-not $files.Count) { return $null }
     $best = $files | Sort-Object { Fresh-ParseDate $_.ReleaseDate @('yyyy/MM/dd', 'yyyy/M/d') } -Descending | Select-Object -First 1

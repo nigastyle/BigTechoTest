@@ -1,13 +1,13 @@
 # Диагноз по жалобе: собирает улики из всех тестов и ранжирует вероятные причины (правила - в lib-70-complaint.ps1).
 Step 'Диагноз по жалобе' {
-    if (-not $G.ComplaintKeys -or @($G.ComplaintKeys).Count -eq 0) { return }
+    if (-not $G.ComplaintKeys -or (AsArr $G.ComplaintKeys).Count -eq 0) { return }
     $G.ComplaintCauses = $null
-    $picked = @($G.Complaints | Where-Object { @($G.ComplaintKeys) -contains $_.Key })
+    $picked = @($G.Complaints | Where-Object { (AsArr $G.ComplaintKeys) -contains $_.Key })
     if (-not $picked.Count) { return }
     $sec = New-Section 'Диагноз по жалобе'
     Add-Row $sec 'Жалоба клиента' (($picked | ForEach-Object { $_.Title }) -join '; ')
     foreach ($cmp in $picked) {
-        foreach ($rule in @($cmp.Rules)) {
+        foreach ($rule in (AsArr $cmp.Rules)) {
             if (-not $rule) { continue }
             try { & $rule } catch { $G.Log.Add(('Диагноз по жалобе, правило {0}: {1}' -f $cmp.Key, $_.Exception.Message)) }
         }

@@ -117,7 +117,7 @@ $cxRuleSoft = {
 # ---- каталог жалоб
 $G.Complaints = New-Object System.Collections.Generic.List[object]
 function Cx-Def($Key, $Title, $Hint, $Tests, $Rules) {
-    $G.Complaints.Add([pscustomobject]@{ Key = $Key; Title = $Title; Hint = $Hint; Tests = $Tests; Rules = @($Rules) })
+    $G.Complaints.Add([pscustomobject]@{ Key = $Key; Title = $Title; Hint = $Hint; Tests = $Tests; Rules = (AsArr $Rules) })
 }
 
 Cx-Def 'shutdown' 'Сам выключается / перезагружается' 'Проверьте розетку/удлинитель/ИБП, почистите от пыли, обновите BIOS и драйверы чипсета, проверьте план электропитания; если сбои редкие и без закономерности - повторите диагностику после нескольких дней работы.' @{
@@ -321,14 +321,14 @@ Cx-Def 'usb' 'Не работают USB / устройства отвалива�
 # ---- применение пресета жалоб поверх обычного выбора
 function Set-ComplaintPreset($Keys) {
     $want = @()
-    foreach ($ck in @($Keys)) { $t = ([string]$ck).Trim().ToLower(); if ($t) { $want += $t } }
+    foreach ($ck in (AsArr $Keys)) { $t = ([string]$ck).Trim().ToLower(); if ($t) { $want += $t } }
     $known = @($G.Complaints | ForEach-Object { $_.Key })
     $sel = @($want | Where-Object { $known -contains $_ } | Select-Object -Unique)
     $G.ComplaintKeys = $sel
     $G.ComplaintCauses = $null
     if (-not $sel.Count) { return }
     foreach ($cmp in @($G.Complaints | Where-Object { $sel -contains $_.Key })) {
-        foreach ($tk in @($cmp.Tests.Keys)) {
+        foreach ($tk in (AsArr $cmp.Tests.Keys)) {
             $tv = $cmp.Tests[$tk]
             if ($tv -is [bool]) {
                 # «включить» только добавляет; явное false в каталоге не отключает тесты других жалоб

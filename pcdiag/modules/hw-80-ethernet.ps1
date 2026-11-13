@@ -31,7 +31,7 @@ Step 'Сеть: проверка кабеля Ethernet' {
         $maxM = 0.0
         try {
             $sd = Get-NetAdapterAdvancedProperty -Name $a.Name -RegistryKeyword '*SpeedDuplex' -ErrorAction Stop
-            foreach ($d in @($sd.ValidDisplayValues)) {
+            foreach ($d in (AsArr $sd.ValidDisplayValues)) {
                 $m = [regex]::Match("$d", '(?i)(\d+(?:[.,]\d+)?)\s*(Gbps|Gb|G|Mbps|Mb)')
                 if ($m.Success) {
                     $n = [double]::Parse(($m.Groups[1].Value -replace ',', '.'), $IC)

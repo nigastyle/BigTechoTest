@@ -57,7 +57,7 @@ Step 'Охлаждение: кривая нагрева и остывания' {
     if (-not $ok -or (Stop-Requested)) { Warn 'тест остановлен'; Add-Row $s 'Тест' 'остановлен досрочно — выводы не делаются' 'warn'; return }
 
     $good = { param($arr, $a, $b) $r = @(); for ($i = $a; $i -lt $b; $i++) { if (-not [double]::IsNaN($arr[$i])) { $r += $arr[$i] } }; ,$r }
-    $avgOf = { param($arr) if (@($arr).Count) { (@($arr) | Measure-Object -Average).Average } else { $null } }
+    $avgOf = { param($arr) if ((AsArr $arr).Count) { ((AsArr $arr) | Measure-Object -Average).Average } else { $null } }
     $idleT = & $avgOf (& $good $T 5 $nIdle)
     $idleP = & $avgOf (& $good $P 5 $nIdle)
     $idleF = & $avgOf (& $good $F 0 $nIdle)

@@ -76,7 +76,7 @@ Step 'Видеокарта: стабильность (Vulkan, долгий)' {
 
     # --- 2. разбор кривых (если данных мало — не делаем выводов)
     if ($L.Count -lt 20) { Add-Row $s 'Анализ кривых' 'слишком короткий тест для анализа' 'warn'; return }
-    $a = @($L)
+    $a = (AsArr $L)
     $n = $a.Count
     $warmEnd = [int][math]::Max(5, [math]::Floor($n * 0.15))     # первые ~15 % — прогрев
     $steady = @($a | Select-Object -Skip $warmEnd)

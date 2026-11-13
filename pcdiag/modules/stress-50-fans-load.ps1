@@ -21,7 +21,7 @@ Step 'Вентиляторы: реакция на нагрузку' {
         Start-Sleep -Milliseconds 800
     }
     $t0C = if ($bt.Count) { ($bt | Measure-Object -Average).Average } else { $null }
-    $avgOf = { param($a) (@($a) | Measure-Object -Average).Average }
+    $avgOf = { param($a) ((AsArr $a) | Measure-Object -Average).Average }
     $fb = @{}; foreach ($kk in $base.Keys) { $fb[$kk] = & $avgOf $base[$kk] }
     $cb = @{}; foreach ($kk in $baseC.Keys) { $cb[$kk] = & $avgOf $baseC[$kk] }
     $fmax = @{}; foreach ($kk in $fb.Keys) { $fmax[$kk] = $fb[$kk] }

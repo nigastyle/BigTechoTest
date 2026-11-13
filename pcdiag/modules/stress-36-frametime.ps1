@@ -60,7 +60,7 @@ Step 'Видеокарта: фризы и статтеры (frametime)' {
         Add-Row $s 'Захват кадров' ('получено кадров: {0} — данных недостаточно (PresentMon не увидел {1}; нужны права администратора и работающее окно)' -f $ft.Count, $procName) 'warn'
         return
     }
-    $arr = $ft.ToArray(); $sorted = [double[]]$arr.Clone(); [array]::Sort($sorted)
+    $arr = [double[]](AsArr $ft); $sorted = [double[]]$arr.Clone(); [array]::Sort($sorted)
     $total = ($arr | Measure-Object -Sum).Sum
     $avgFps = 1000.0 * $arr.Count / $total
     $median = Get-FtPct $sorted 50

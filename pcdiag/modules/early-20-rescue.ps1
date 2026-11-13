@@ -24,7 +24,7 @@ Step 'Спасение данных: проверка риска потери' {
         Info 'оцениваю размер папок (чтение каталогов)...'
         foreach ($it in $items) { if ($it.Kind -eq 'dir') { $it.Bytes = Get-DirBytes $it.Src } }
         $ans = Show-RescueDialog $danger $items $dLetters
-        if ($ans -and $ans.Action -eq 'copy' -and @($ans.Items).Count) {
+        if ($ans -and $ans.Action -eq 'copy' -and (AsArr $ans.Items).Count) {
             $keepTests = [bool]$ans.KeepDiskTests
             $need = [int64]0; foreach ($it in $ans.Items) { if ($null -ne $it.Bytes) { $need += [int64]$it.Bytes } }
             $free = $null; try { $free = [int64](Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='" + ([IO.Path]::GetPathRoot($ans.Dest)).TrimEnd('\') + "'") -ErrorAction Stop).FreeSpace } catch {}

@@ -19,7 +19,7 @@ Step 'Проверка Б/У: износ и следы' {
 
     # ================================================================ 1. НАКОПИТЕЛИ
     $disks = @()
-    foreach ($sd in @($G.SmartDevs)) {
+    foreach ($sd in (AsArr $G.SmartDevs)) {
         if (-not $sd -or -not $sd.J) { continue }
         $j = $sd.J
         $nv = $j.nvme_smart_health_information_log
@@ -36,7 +36,7 @@ Step 'Проверка Б/У: износ и следы' {
             $used = UNum $nv.percentage_used; $uns = UNum $nv.unsafe_shutdowns
         } else {
             $bs = UNum $j.logical_block_size; if (-not $bs) { $bs = 512 }
-            foreach ($a in @($j.ata_smart_attributes.table)) {
+            foreach ($a in (AsArr $j.ata_smart_attributes.table)) {
                 if (-not $a) { continue }
                 $rv = UNum $a.raw.value
                 if ($a.id -in 241, 246 -and $null -eq $wTB -and $null -ne $rv -and $cap) { $t1 = $rv * $bs / 1e12; if ($t1 / ($cap / 1e12) -lt 3000) { $wTB = $t1 } }
@@ -47,7 +47,7 @@ Step 'Проверка Б/У: износ и следы' {
         $disks += [pscustomobject]@{ Name = $(if ($sd.Label) { $sd.Label } else { $sd.Model }); Model = $sd.Model; Cap = $cap; Ssd = $ssd; Poh = $poh; Cyc = $cyc; WTB = $wTB; Used = $used; Uns = $uns; Removable = ($sd.Type -match 'usb') }
     }
     if (-not $disks.Count) {
-        foreach ($d in @($G.Num.disks)) { if (-not $d) { continue }; $disks += [pscustomobject]@{ Name = $d.m; Model = $d.m; Cap = ([double]$d.gb * 1e9); Ssd = [bool]$d.ssd; Poh = (UNum $d.poh); Cyc = $null; WTB = $(if ($d.wgb) { [double]$d.wgb / 1000 } else { $null }); Used = $(if ($null -ne $d.life) { 100 - [double]$d.life } else { $null }); Uns = $null; Removable = $false } }
+        foreach ($d in (AsArr $G.Num.disks)) { if (-not $d) { continue }; $disks += [pscustomobject]@{ Name = $d.m; Model = $d.m; Cap = ([double]$d.gb * 1e9); Ssd = [bool]$d.ssd; Poh = (UNum $d.poh); Cyc = $null; WTB = $(if ($d.wgb) { [double]$d.wgb / 1000 } else { $null }); Used = $(if ($null -ne $d.life) { 100 - [double]$d.life } else { $null }); Uns = $null; Removable = $false } }
     }
     if (-not $disks.Count) { URow 'Накопители: наработка и износ' 'данных SMART нет (smartctl/LibreHardwareMonitor недоступны)' -1 }
     foreach ($dk in $disks) {
@@ -132,7 +132,7 @@ Step 'Проверка Б/У: износ и следы' {
         if (-not (Test-Path $batTxt)) { $null = powercfg /batteryreport /xml /output "$batTxt" 2>&1 }
         try {
             [xml]$bx = Get-Content $batTxt -Raw -Encoding UTF8
-            foreach ($bt in @($bx.BatteryReport.Batteries.Battery)) {
+            foreach ($bt in (AsArr $bx.BatteryReport.Batteries.Battery)) {
                 $des = UNum $bt.DesignCapacity; $ful = UNum $bt.FullChargeCapacity; $cy = UNum $bt.CycleCount
                 $mf = Clean $bt.Manufacturer; $bid = Clean $bt.Id; $bsn = Clean $bt.SerialNumber
                 $hl = $null; if ($des -gt 0 -and $ful -gt 0) { $hl = [math]::Round($ful / $des * 100) }
@@ -169,7 +169,7 @@ Step 'Проверка Б/У: износ и следы' {
             foreach ($pf in @(Get-ChildItem "$env:SystemDrive\Users" -Directory -ErrorAction SilentlyContinue)) { foreach ($sub in 'Desktop', 'Downloads', 'Documents', 'AppData\Roaming', 'AppData\Local') { $roots += (Join-Path $pf.FullName $sub) } }
             foreach ($rt in $roots) { if ($rt -and (Test-Path $rt)) { foreach ($it in @(Get-ChildItem $rt -Force -ErrorAction SilentlyContinue)) { if ($it.Name -match $minerRe) { AddHit 'на диске' $it.FullName } } } }
         } catch {}
-        try { foreach ($tk in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) { $ac = (@($tk.Actions) | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ' '; if ("$($tk.TaskName) $ac" -match $minerRe) { AddHit 'задача планировщика' $tk.TaskName } } } catch {}
+        try { foreach ($tk in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) { $ac = ((AsArr $tk.Actions) | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ' '; if ("$($tk.TaskName) $ac" -match $minerRe) { AddHit 'задача планировщика' $tk.TaskName } } } catch {}
         try { foreach ($rk in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run') { $pr = Get-ItemProperty $rk -ErrorAction SilentlyContinue; if ($pr) { foreach ($pp in $pr.PSObject.Properties) { if ($pp.Name -notmatch '^PS' -and "$($pp.Name) $($pp.Value)" -match $minerRe) { AddHit 'автозапуск' $pp.Name } } } } } catch {}
         try { foreach ($th in @(Get-MpThreat -ErrorAction Stop)) { if ("$($th.ThreatName)" -match '(?i)miner|coin') { AddHit 'антивирус' $th.ThreatName } } } catch {}
         if ($hits.Count) { $script:uMiner = $true; URow 'Следы майнинга' ('найдено: ' + (($hits | Select-Object -Unique) -join '; ')) 2 'Видеокарта' }
@@ -263,7 +263,7 @@ Step 'Проверка Б/У: износ и следы' {
     $verdict = 'хорошее'; $st = 'ok'; $lvlNum = 0
     if ($script:uCrit -ge 2 -or $script:uPts -ge 6 -or $script:uMiner) { $verdict = 'рискованно'; $st = 'crit'; $lvlNum = 2 }
     elseif ($script:uPts -ge 2) { $verdict = 'есть износ'; $st = 'warn'; $lvlNum = 1 }
-    Add-Table $s 'Что проверено / находка / оценка риска' @($uRows)
+    Add-Table $s 'Что проверено / находка / оценка риска' (AsArr $uRows)
     Add-Row $s 'Состояние Б/У' ('{0} (баллов риска: {1}; высоких: {2}, средних: {3}; проверено пунктов: {4})' -f $verdict, $script:uPts, $script:uCrit, $script:uWarn, $checked) $st
     Add-Row $s 'Как читать' 'Баллы: средний риск = 1, высокий = 3. «Рискованно»: от 6 баллов, 2+ высоких рисков или найдены следы майнинга. Данные косвенные: сопоставьте с ценой и состоянием корпуса, продавцу задайте вопросы по найденному.'
     if ($lvlNum -eq 2) { Add-Issue 'warn' 'Windows' ('Состояние Б/У: РИСКОВАННО (баллов {0})' -f $script:uPts) 'Серьёзный износ или следы интенсивной эксплуатации/майнинга - торгуйтесь или откажитесь. Подробности - раздел «Проверка Б/У перед покупкой».' }

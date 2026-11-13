@@ -292,17 +292,10 @@ public static class DiagUi {
     }
 
     public static string Ask(string text, string title, bool yesNo) {
-        Form o = MakeOwner();
-        try {
-            DialogResult r = MessageBox.Show(o, text, title,
-                yesNo ? MessageBoxButtons.YesNo : MessageBoxButtons.OKCancel,
-                yesNo ? MessageBoxIcon.Question : MessageBoxIcon.Information);
-            return (r == DialogResult.Yes || r == DialogResult.OK) ? "yes" : "no";
-        } finally {
-            o.Close();
-            o.Dispose();
-        }
+        int r = DiagDialog.Run(null, title, text, yesNo ? new string[] { "Да", "Нет" } : new string[] { "OK", "Отмена" }, yesNo ? 0 : 1, 0, 1);
+        return r == 0 ? "yes" : "no";
     }
+    internal static Form Owner0() { return MakeOwner(); }
 
     public static string ScreenTest() {
         Color[] colors = new Color[] { Color.FromArgb(255, 0, 0), Color.FromArgb(0, 255, 0), Color.FromArgb(0, 0, 255),
@@ -536,6 +529,28 @@ static class DiagGlyph {
                             new PointF(x + s * 0.5f, yy + s * 0.32f), new PointF(x + s * 0.08f, yy + s * 0.16f) });
                     }
                     break;
+                case 16: // инструменты: флешка
+                    using (GraphicsPath gp = DiagTheme.Round(new RectangleF(x + s * 0.3f, y + s * 0.34f, s * 0.4f, s * 0.6f), s * 0.07f)) g.DrawPath(p, gp);
+                    g.DrawRectangle(p, x + s * 0.37f, y + s * 0.08f, s * 0.26f, s * 0.26f);
+                    g.DrawLine(p, x + s * 0.45f, y + s * 0.17f, x + s * 0.45f, y + s * 0.2f);
+                    g.DrawLine(p, x + s * 0.55f, y + s * 0.17f, x + s * 0.55f, y + s * 0.2f);
+                    break;
+                case 17: // булавка (поверх всех окон)
+                    g.DrawLines(p, new PointF[] { new PointF(x + s * 0.36f, y + s * 0.1f), new PointF(x + s * 0.64f, y + s * 0.1f) });
+                    g.DrawLines(p, new PointF[] { new PointF(x + s * 0.42f, y + s * 0.1f), new PointF(x + s * 0.4f, y + s * 0.42f), new PointF(x + s * 0.24f, y + s * 0.6f),
+                        new PointF(x + s * 0.76f, y + s * 0.6f), new PointF(x + s * 0.6f, y + s * 0.42f), new PointF(x + s * 0.58f, y + s * 0.1f) });
+                    g.DrawLine(p, x + s * 0.5f, y + s * 0.6f, x + s * 0.5f, y + s * 0.94f);
+                    break;
+                case 18: // вопрос
+                    g.DrawEllipse(p, x + s * 0.08f, y + s * 0.08f, s * 0.84f, s * 0.84f);
+                    g.DrawArc(p, x + s * 0.38f, y + s * 0.24f, s * 0.24f, s * 0.22f, 180, 250);
+                    g.DrawLine(p, x + s * 0.52f, y + s * 0.47f, x + s * 0.5f, y + s * 0.56f);
+                    using (SolidBrush b = new SolidBrush(c)) g.FillEllipse(b, x + s * 0.45f, y + s * 0.66f, s * 0.1f, s * 0.1f);
+                    break;
+                case 19: // папка
+                    g.DrawLines(p, new PointF[] { new PointF(x + s * 0.08f, y + s * 0.8f), new PointF(x + s * 0.08f, y + s * 0.2f), new PointF(x + s * 0.38f, y + s * 0.2f),
+                        new PointF(x + s * 0.46f, y + s * 0.3f), new PointF(x + s * 0.92f, y + s * 0.3f), new PointF(x + s * 0.92f, y + s * 0.8f), new PointF(x + s * 0.08f, y + s * 0.8f) });
+                    break;
                 case 15: // пульс
                     g.DrawLines(p, new PointF[] { new PointF(x + s * 0.04f, y + s * 0.56f), new PointF(x + s * 0.3f, y + s * 0.56f),
                         new PointF(x + s * 0.4f, y + s * 0.24f), new PointF(x + s * 0.54f, y + s * 0.82f), new PointF(x + s * 0.64f, y + s * 0.44f),
@@ -576,6 +591,8 @@ public class DiagChooser : Form {
     public static string MachineInfo = "";   // body.ps1: [DiagChooser]::MachineInfo = 'Производитель Модель · CPU · RAM'
     public static string Brand = "BIG TECHNO CLUB";
     public static bool RequireAccept = true;  // body.ps1 в авто-режиме окно не показывает; можно выключить: [DiagChooser]::RequireAccept = $false
+    public static string[] Complaints;       // body.ps1: жалобы из $G.Complaints — "ключ|Название|тест=1,тест=20"
+    public static string ReportsDir = "";    // body.ps1: папка с копиями отчётов (<папка программы>\reports)
     const string RegKey = "Software\\BigTechoTest";
 
     // Приняты ли условия на этом компьютере (HKCU\Software\BigTechoTest, Accepted=1)
@@ -609,7 +626,11 @@ public class DiagChooser : Form {
     }
 
     internal readonly List<Opt> opts = new List<Opt>();
-    internal int mode;            // 0 быстрая, 1 полная, 2 выборочная
+    internal int mode;            // 0 быстрая, 1 полная, 2 выборочная, 3 по жалобе
+    internal readonly HashSet<string> complaintSel = new HashSet<string>();
+    internal float dpiK = 1f, uiScale = 1f;
+    internal bool pinned;
+    internal ToolTip tips;
     internal int tab;
     internal int sub;             // подраздел «О программе»
     internal bool accepted = true, needAccept;
@@ -618,7 +639,10 @@ public class DiagChooser : Form {
     public string Result = "cancel";
 
     internal static readonly string[] TabNames = { "Режим", "Процессор", "Память", "Видеокарта", "Питание", "Накопители",
-        "Система и журналы", "С вашим участием", "Обслуживание", "История проверок", "Безопасность", "О программе" };
+        "Система и журналы", "С вашим участием", "Обслуживание", "История проверок", "Безопасность", "О программе", "Инструменты" };
+    // порядок в меню слева: тесты, затем «СЕРВИС» (инструменты, история), затем «СПРАВКА»
+    internal static readonly int[] NavOrder = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 9, 10, 11 };
+    public const int TabTools = 12, TabHistory = 9;
     internal static readonly string[] SubNames = { "Обзор", "Как читать отчёт", "Правила использования", "Конфиденциальность", "Программы и лицензии", "Благодарности" };
     public const int SubRules = 2;
     public static int TabCount { get { return TabNames.Length; } }
@@ -647,20 +671,12 @@ public class DiagChooser : Form {
         TopMost = true;
         KeyPreview = true;
         DoubleBuffered = true;
-        try { using (Graphics g = CreateGraphics()) k = g.DpiX / 96f; } catch (Exception) { }
-        if (k < 1f) k = 1f;
-
-        fTitle = DiagTheme.Head(19f);
-        fH2 = DiagTheme.Head(14f);
-        fH3 = DiagTheme.Head(11.5f);
-        fBig = DiagTheme.Head(17f);
-        fBrand = DiagTheme.Head(10f);
-        fBody = DiagTheme.Body(9.5f);
-        fSmall = DiagTheme.Body(8.5f);
-        fSemi = DiagTheme.Semi(10.5f);
-        fSemiS = DiagTheme.Semi(9f);
-        fBtn = DiagTheme.Semi(11f);
-        fCap = DiagTheme.Semi(7.5f);
+        try { using (Graphics g = CreateGraphics()) dpiK = g.DpiX / 96f; } catch (Exception) { }
+        if (dpiK < 1f) dpiK = 1f;
+        uiScale = DiagWinCfg.GetF("Chooser.Scale", 1f, 0.8f, 1.5f);
+        k = dpiK * uiScale;
+        MakeFonts();
+        tips = new ToolTip(); tips.InitialDelay = 400; tips.ReshowDelay = 100; tips.AutoPopDelay = 8000;
 
         BuildOptions();
 
@@ -671,17 +687,80 @@ public class DiagChooser : Form {
         Controls.Add(page); Controls.Add(nav); Controls.Add(bottom); Controls.Add(header);
 
         Rectangle wa = Screen.PrimaryScreen.WorkingArea;
-        int w = Math.Min(S(1120), wa.Width), h = Math.Min(S(740), wa.Height);
-        MinimumSize = new Size(Math.Min(S(1000), wa.Width), Math.Min(S(680), wa.Height));
+        int w = Math.Min((int)(1120 * dpiK), wa.Width), h = Math.Min((int)(740 * dpiK), wa.Height);
+        MinimumSize = new Size(Math.Min((int)(900 * dpiK), wa.Width), Math.Min((int)(600 * dpiK), wa.Height));
         Size = new Size(w, h);
+        Rectangle saved;
+        if (DiagWinCfg.GetRect("Chooser.Bounds", MinimumSize, out saved)) {
+            StartPosition = FormStartPosition.Manual;
+            Bounds = saved;
+            if (DiagWinCfg.Get("Chooser.Max", "0") == "1") WindowState = FormWindowState.Maximized;
+        }
+        pinned = DiagWinCfg.Get("Chooser.Pin", "0") == "1";
 
         ApplyPreset(false);
         mode = 0;
         if (RequireAccept && !IsAccepted()) { accepted = false; needAccept = true; tab = 11; sub = SubRules; }
-        Shown += delegate { Activate(); TopMost = false; page.Focus(); };
+        Shown += delegate { Activate(); TopMost = pinned; page.Focus(); };
     }
 
     internal int S(double v) { return (int)Math.Round(v * k); }
+
+    void MakeFonts() {
+        float u = uiScale;
+        fTitle = DiagTheme.Head(19f * u);
+        fH2 = DiagTheme.Head(14f * u);
+        fH3 = DiagTheme.Head(11.5f * u);
+        fBig = DiagTheme.Head(17f * u);
+        fBrand = DiagTheme.Head(10f * u);
+        fBody = DiagTheme.Body(9.5f * u);
+        fSmall = DiagTheme.Body(8.5f * u);
+        fSemi = DiagTheme.Semi(10.5f * u);
+        fSemiS = DiagTheme.Semi(9f * u);
+        fBtn = DiagTheme.Semi(11f * u);
+        fCap = DiagTheme.Semi(7.5f * u);
+    }
+
+    // масштаб интерфейса: Ctrl+колесо, Ctrl +/−/0, кнопки в шапке
+    internal void SetScale(float s) {
+        s = (float)Math.Round(Math.Max(0.8f, Math.Min(1.5f, s)) * 10f) / 10f;
+        if (Math.Abs(s - uiScale) < 0.01f) return;
+        uiScale = s; k = dpiK * uiScale;
+        MakeFonts();
+        SuspendLayout();
+        nav.Width = S(236); bottom.Height = S(84); header.Height = S(72);
+        ResumeLayout(true);
+        page.Rebuild(false);
+        Changed(); header.Invalidate();
+        DiagWinCfg.SetF("Chooser.Scale", uiScale);
+    }
+    internal void ScaleStep(int dir) { SetScale(dir == 0 ? 1f : uiScale + 0.1f * dir); }
+
+    internal void TogglePin() {
+        pinned = !pinned; TopMost = pinned;
+        DiagWinCfg.Set("Chooser.Pin", pinned ? "1" : "0");
+        header.Invalidate();
+    }
+
+    internal void ShowHelp() {
+        DiagHelpForm.ShowFor(this, Bounds, "Горячие клавиши", new string[][] {
+            new string[] { "Enter", "начать диагностику" },
+            new string[] { "Esc", "отмена и выход" },
+            new string[] { "Ctrl+Tab / Ctrl+Shift+Tab", "следующий / предыдущий раздел" },
+            new string[] { "Ctrl+колесо / Ctrl + / Ctrl −", "крупнее / мельче" },
+            new string[] { "Ctrl+0", "обычный масштаб" },
+            new string[] { "Ctrl+T", "поверх всех окон" },
+            new string[] { "↑ ↓ / PgUp PgDn", "прокрутка страницы" },
+            new string[] { "F1", "эта справка" } });
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e) {
+        try {
+            DiagWinCfg.Set("Chooser.Max", WindowState == FormWindowState.Maximized ? "1" : "0");
+            DiagWinCfg.SetRect("Chooser.Bounds", WindowState == FormWindowState.Normal ? Bounds : RestoreBounds);
+        } catch (Exception) { }
+        base.OnFormClosing(e);
+    }
 
     protected override void OnHandleCreated(EventArgs e) {
         base.OnHandleCreated(e);
@@ -717,6 +796,8 @@ public class DiagChooser : Form {
         AddC(1, "linpack", "Intel MKL Linpack",
             "Максимальный нагрев: ловит перегрев, слабое питание процессора (VRM) и неверные результаты расчётов.",
             0.5, "linpackmin", new string[] { "3 мин", "10 мин", "30 мин" }, new string[] { "3", "10", "30" }, new double[] { 3, 10, 30 });
+        Add(1, "coolcurve", "Кривая нагрева и остывания",
+            "Ловит деградацию охлаждения: засохшую термопасту, забитый пылью радиатор, медленную реакцию вентилятора.", 4);
         // 2 Память
         AddC(2, "ram", "Быстрый тест оперативной памяти",
             "Ловит битые ячейки ОЗУ — частую причину синих экранов и «случайных» вылетов программ.",
@@ -733,11 +814,21 @@ public class DiagChooser : Form {
             0.5, "gpusec", new string[] { "1 мин", "5 мин", "15 мин", "30 мин" }, new string[] { "60", "300", "900", "1800" }, new double[] { 1, 5, 15, 30 });
         Add(3, "vram", "Тест видеопамяти (memtest_vulkan)",
             "Ловит ошибки видеопамяти — причину артефактов, полос на экране и вылетов игр.", 6);
+        AddC(3, "gpustab", "Стабильность видеокарты (Vulkan, долгий)",
+            "Ловит то, что не видно за минуту: сбои драйвера, просадки частоты, дребезг лимита мощности, медленный прогрев.",
+            0.5, "gpustabmin", new string[] { "10 мин", "20 мин", "60 мин" }, new string[] { "10", "20", "60" }, new double[] { 10, 20, 60 }).Idx = 1;
+        Add(3, "frametime", "Фризы и статтеры (frametime)",
+            "Ловит рывки и подвисания кадров под ровной нагрузкой — признак проблем с драйверами, задержками DPC или охлаждением.", 1.5);
         // 4 Питание
         Opt psu = AddC(4, "psu", "Блок питания: CPU + GPU одновременно",
             "Максимальная совместная нагрузка — ловит просадки напряжений, перезагрузки и выключения под нагрузкой.",
             0.5, "psumin", new string[] { "2 мин", "10 мин", "30 мин" }, new string[] { "2", "10", "30" }, new double[] { 2, 10, 30 });
         if (isLaptop) { psu.Badge = "ноутбук — осторожно"; psu.BadgeWarn = true; }
+        Opt bd = AddC(4, "batdrain", "Аккумулятор: тест разряда под нагрузкой",
+            "Ловит изношенную батарею и сбитую калибровку: реальная автономность против заявленной. Понадобится отключить зарядку.",
+            1, "batmin", new string[] { "5 мин", "10 мин", "20 мин" }, new string[] { "5", "10", "20" }, new double[] { 5, 10, 20 });
+        bd.Idx = 1;
+        if (!isLaptop) { bd.Enabled = false; bd.Badge = "только ноутбук"; } else bd.Badge = "с участием";
         // 5 Накопители
         Add(5, "disk", "Скорость чтения и записи (DiskSpd)",
             "Ловит медленные и деградирующие диски, неверный режим работы (SATA II, PCIe x1).", 1.5);
@@ -746,6 +837,9 @@ public class DiagChooser : Form {
             0, "surfacemin", new string[] { "3 мин", "10 мин", "20 мин", "60 мин" }, new string[] { "3", "10", "20", "60" }, new double[] { 3, 10, 20, 60 });
         Add(5, "selftest", "Самотест SMART (короткий)",
             "Диск сам проверяет свою механику и электронику — ловит скрытые аппаратные неисправности.", 2.5);
+        Opt ff = Add(5, "fakeflash", "Поддельный объём флешки",
+            "Ловит флешки и карты памяти с фальшивым объёмом (как H2testw): записывает и сверяет данные. Только съёмные USB-накопители, чужие файлы не трогаются.", 10);
+        ff.Badge = "вставьте флешку";
         // 6 Система и журналы
         Opt info = Add(6, "info", "Сведения о компьютере",
             "Процессор, плата, BIOS, память, диски и SMART, видеокарта, батарея — основа отчёта.", 1);
@@ -756,6 +850,10 @@ public class DiagChooser : Form {
             "Синие экраны (дампы BSOD), сбои видеодрайвера, скорость загрузки, ошибки дисков, задержки DPC.", 0.2);
         Add(6, "net", "Сеть и интернет",
             "Адаптеры, Wi-Fi, пинг и скорость интернета (Speedtest by Ookla) — ловит обрывы и низкую скорость.", 0.7);
+        Add(6, "usb", "USB-порты",
+            "Ловит порты, работающие как USB 2.0 вместо 3.x, перегруженные хабы и медленные флешки.", 0.5);
+        Add(6, "used", "Проверка Б/У перед покупкой",
+            "Ловит следы износа и «скрученный» пробег: наработку дисков, циклы батареи, переустановку Windows, замену комплектующих.", 0.5);
         // 7 С вашим участием
         Add(7, "kbd", isLaptop ? "Клавиатура, мышь и тачпад" : "Клавиатура и мышь",
             "Каждая клавиша, кнопки мыши, колесо" + (isLaptop ? ", жесты тачпада" : "") + " — ловит залипшие и мёртвые клавиши.", 1.5);
@@ -763,18 +861,28 @@ public class DiagChooser : Form {
         Add(7, "sound", "Динамики", "Звук по очереди слева и справа — ловит хрип и неработающий канал.", 0.5);
         Add(7, "mic", "Микрофон", "Запись и воспроизведение — ловит тихий, шумящий или отключённый микрофон.", 0.5);
         Add(7, "cam", "Веб-камера", "Показывает изображение с камеры — ловит неработающую или тёмную камеру.", 0.5);
+        Add(7, "audioloop", "Динамики через микрофон", "Программа сама слушает свой сигнал микрофоном — ловит хрип, искажения и молчащий динамик.", 0.5);
+        Add(7, "screenfull", "Полный тест экрана", "Цвета, градиенты, засветы, шлейфы на каждом мониторе — ловит битые пиксели, полосы, banding и мерцание ШИМ.", 3);
+        Add(7, "periph", "Периферия: клавиатура, мышь, геймпад", "Сколько клавиш нажимается одновременно, частота опроса и двойные клики мыши, дрифт стиков геймпада.", 3);
         // 8 Обслуживание
         Add(8, "sys", "Целостность Windows и WinSAT",
             "DISM, SFC и CHKDSK — ловят повреждённые системные файлы и ошибки файловой системы; WinSAT — оценка.", 30);
         Add(8, "av", "Проверка на вирусы (Defender, быстрая)", "Ловит вирусы, майнеры и рекламные программы.", 6);
+        Add(8, "kvrt", "Глубокая проверка Kaspersky (KVRT)", "Ловит вирусы и руткиты, пропущенные Defender. Скачивает 100+ МБ, проверка долгая.", 20);
         Add(8, "drivers", "Установить / обновить драйверы", "Находит устройства без драйверов и устаревшие драйверы.", 10);
         Opt fw = Add(8, "firmware", "…и прошивки BIOS", "Только если их предложит Windows Update; доступно вместе с драйверами.", 0);
         fw.TimeText = "—";
+        Opt sd = Add(8, "sdio", "…и Snappy Driver Installer", "Дополнительный поиск драйверов по драйверпакам (скачивает несколько ГБ). Доступно вместе с драйверами.", 15);
+        sd.Badge = "долго";
         if (!hasPawn) Add(8, "pawn", "Драйвер датчиков PawnIO", "Нужен, чтобы видеть температуру процессора. Ставится один раз.", 0.1);
         // 9 Безопасность (настройка, не тест)
         Opt nh = Add(9, "nohwinfo", "Не запускать HWiNFO",
             "ТемпературныйНюхач будет следить только по LibreHardwareMonitor. Включайте, если HWiNFO на этом ПК зависает или конфликтует.", 0);
         nh.NotTest = true; nh.TimeText = "";
+        // 12 Инструменты
+        Opt rm = Add(TabTools, "remote", "Удалённая диагностика: включить",
+            "Мастер видит ход проверки вживую по ссылке: этапы, датчики, найденные проблемы. Нужен интернет.", 0);
+        rm.NotTest = true; rm.TimeText = "";
     }
 
     internal Opt Find(string key) { foreach (Opt o in opts) if (o.Key == key) return o; return null; }
@@ -783,11 +891,14 @@ public class DiagChooser : Form {
 
     void ApplyPreset(bool full) {
         string[] all = { "programs", "logs", "net", "kbd", "screen", "sound", "mic", "cam", "cpu", "prime", "ycr", "linpack", "gpu", "psu",
-                         "ram", "disk", "surface", "selftest", "av", "drivers", "pawn" };
+                         "ram", "disk", "surface", "selftest", "av", "drivers", "pawn", "usb", "audioloop" };
         foreach (Opt o in opts) if (!o.Locked && !o.NotTest) o.On = false;
         Fix();
         foreach (string key in all) Set(key, true);
         Set("sys", full); Set("vram", full); Set("tm5", full);
+        Set("gpustab", full); Set("frametime", full); Set("screenfull", full); Set("periph", full); Set("coolcurve", full);
+        Set("batdrain", full && isLaptop);
+        SetCombo("gpustab", 1); SetCombo("batdrain", 1);
         SetCombo("cpu", full ? 1 : 0); SetCombo("gpu", full ? 1 : 0); SetCombo("ram", full ? 1 : 0); SetCombo("prime", full ? 1 : 0);
         SetCombo("ycr", full ? 1 : 0); SetCombo("psu", full ? 1 : 0); SetCombo("surface", full ? 2 : 0); SetCombo("linpack", full ? 1 : 0);
         SetCombo("tm5", 1);
@@ -798,25 +909,97 @@ public class DiagChooser : Form {
     void Fix() {
         Opt fw = Find("firmware"), dr = Find("drivers");
         if (fw != null && dr != null) { fw.Enabled = dr.On; if (!dr.On) fw.On = false; }
+        Opt sd = Find("sdio");
+        if (sd != null && dr != null) { sd.Enabled = dr.On; if (!dr.On) sd.On = false; }
+    }
+
+    // ---- режим «По жалобе»: быстрый набор + тесты, которые подбирает выбранная жалоба
+    internal static string[] ComplaintParts(string raw) {
+        string[] f = (raw ?? "").Split('|');
+        return new string[] { f.Length > 0 ? f[0].Trim() : "", f.Length > 1 ? f[1].Trim() : "", f.Length > 2 ? f[2].Trim() : "" };
+    }
+    void ApplyComplaints() {
+        ApplyPreset(false);
+        if (Complaints == null) return;
+        foreach (string raw in Complaints) {
+            string[] c = ComplaintParts(raw);
+            if (!complaintSel.Contains(c[0])) continue;
+            foreach (string kv in c[2].Split(',')) {
+                string[] p = kv.Split('=');
+                if (p.Length != 2) continue;
+                string key = p[0].Trim(), val = p[1].Trim();
+                int num;
+                if (val == "1" || string.Equals(val, "true", StringComparison.OrdinalIgnoreCase)) { Set(key, true); continue; }
+                if (!int.TryParse(val, out num) || num <= 1) continue;
+                foreach (Opt o in opts) {
+                    if (o.ComboKey != key || o.Values == null) continue;
+                    int pick = o.Values.Length - 1;
+                    for (int i = 0; i < o.Values.Length; i++) { int v; if (int.TryParse(o.Values[i], out v) && v >= num) { pick = i; break; } }
+                    if (pick > o.Idx) o.Idx = pick;
+                }
+            }
+        }
+        Fix();
+    }
+    internal void ToggleComplaint(string key) {
+        if (complaintSel.Contains(key)) complaintSel.Remove(key); else complaintSel.Add(key);
+        mode = 3;
+        ApplyComplaints();
+        Changed();
+    }
+
+    // ---- инструменты: отдельный запуск программы с DIAG_TOOL в своём (видимом) окне консоли
+    internal void StartTool(string tool, string title) {
+        string self = Environment.GetEnvironmentVariable("DIAG_SELF");
+        if (string.IsNullOrEmpty(self) || !System.IO.File.Exists(self)) {
+            DiagDialog.InfoOn(this, title, "Не найден файл программы (DIAG_SELF). Запустите BigTechoTest заново.");
+            return;
+        }
+        if (!DiagDialog.AskOn(this, title, "Откроется отдельное окно мастера записи флешки. Диагностика при этом не запускается — это окно выбора тестов останется открытым.\n\nВНИМАНИЕ: все данные на выбранной флешке будут стёрты.", "Запустить", "Отмена")) return;
+        try {
+            string cmd = System.IO.Path.Combine(Environment.SystemDirectory, "cmd.exe");
+            System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo(cmd,
+                "/c start \"BigTechoTest\" \"" + cmd + "\" /c \"\"" + self + "\"\"");
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.EnvironmentVariables["DIAG_TOOL"] = tool;
+            if (psi.EnvironmentVariables.ContainsKey("DIAG_GUI")) psi.EnvironmentVariables.Remove("DIAG_GUI");
+            System.Diagnostics.Process.Start(psi);
+        } catch (Exception ex) {
+            DiagDialog.InfoOn(this, title, "Не удалось запустить: " + ex.Message);
+        }
+    }
+    internal void OpenReports() {
+        string d = ReportsDir;
+        try {
+            if (string.IsNullOrEmpty(d)) d = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            if (!System.IO.Directory.Exists(d)) System.IO.Directory.CreateDirectory(d);
+            System.Diagnostics.Process.Start("explorer.exe", "\"" + d + "\"");
+        } catch (Exception) { DiagDialog.InfoOn(this, "Папка с отчётами", "Не удалось открыть папку:\n" + d); }
     }
 
     internal void SetMode(int m) {
         if (m == 0 || m == 1) ApplyPreset(m == 1);
+        if (m == 3) ApplyComplaints();
+        bool rebuild = (m == 3) != (mode == 3);
         mode = m;
+        if (rebuild && page != null) page.Rebuild(false);
         Changed();
     }
 
     internal void Toggle(Opt o) {
         if (o.Locked || !o.Enabled) return;
         o.On = !o.On;
-        if (!o.NotTest) mode = 2;
+        if (!o.NotTest) { if (mode == 3 && page != null) page.Rebuild(false); mode = 2; }
         Fix();
         Changed();
     }
 
     internal void PickCombo(Opt o, int idx) {
         if (!o.Enabled) return;
-        o.Idx = idx; o.On = true; mode = 2;
+        o.Idx = idx; o.On = true;
+        if (mode == 3 && page != null) page.Rebuild(false);
+        mode = 2;
         Fix();
         Changed();
     }
@@ -850,7 +1033,7 @@ public class DiagChooser : Form {
 
     internal int CountSelected() {
         int n = 0;
-        foreach (Opt o in opts) if (o.On && o.Key != "info" && o.Key != "pawn" && o.Key != "firmware" && !o.NotTest) n++;
+        foreach (Opt o in opts) if (o.On && o.Key != "info" && o.Key != "pawn" && o.Key != "firmware" && o.Key != "sdio" && !o.NotTest) n++;
         return n + 1;
     }
 
@@ -861,7 +1044,11 @@ public class DiagChooser : Form {
 
     string Serialize() {
         List<string> parts = new List<string>();
-        parts.Add("mode=" + (mode == 0 ? "quick" : mode == 1 ? "full" : "custom"));
+        parts.Add("mode=" + (mode == 0 ? "quick" : mode == 1 ? "full" : mode == 3 ? "complaint" : "custom"));
+        if (mode == 3 && complaintSel.Count > 0) {
+            List<string> ck = new List<string>(complaintSel);
+            parts.Add("complaint=" + string.Join(",", ck.ToArray()));
+        }
         foreach (Opt o in opts) {
             parts.Add(o.Key + "=" + (o.On ? "1" : "0"));
             if (o.Labels != null) parts.Add(o.ComboKey + "=" + o.Values[o.Idx]);
@@ -888,7 +1075,10 @@ public class DiagChooser : Form {
     internal void Start() {
         if (!accepted) { SelectAbout(SubRules); return; }
         if (needAccept) SaveAccepted();
-        if (CountSelected() == 0) { MessageBox.Show(this, "Отметьте хотя бы один тест.", Text); return; }
+        if (mode == 3 && complaintSel.Count == 0) {
+            DiagDialog.InfoOn(this, "Режим «По жалобе»", "Отметьте хотя бы одну жалобу клиента в разделе «Режим» — или выберите другой режим.");
+            SelectTab(0); return;
+        }
         Result = Serialize(); DialogResult = DialogResult.OK; Close();
     }
     internal void Cancel() { Result = "cancel"; DialogResult = DialogResult.Cancel; Close(); }
@@ -896,6 +1086,11 @@ public class DiagChooser : Form {
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData) {
         if (keyData == Keys.Enter) { Start(); return true; }
         if (keyData == Keys.Escape) { Cancel(); return true; }
+        if (keyData == Keys.F1) { ShowHelp(); return true; }
+        if (keyData == (Keys.Control | Keys.Oemplus) || keyData == (Keys.Control | Keys.Add) || keyData == (Keys.Control | Keys.Shift | Keys.Oemplus)) { ScaleStep(1); return true; }
+        if (keyData == (Keys.Control | Keys.OemMinus) || keyData == (Keys.Control | Keys.Subtract)) { ScaleStep(-1); return true; }
+        if (keyData == (Keys.Control | Keys.D0) || keyData == (Keys.Control | Keys.NumPad0)) { ScaleStep(0); return true; }
+        if (keyData == (Keys.Control | Keys.T)) { TogglePin(); return true; }
         if (keyData == (Keys.Control | Keys.Tab) || keyData == (Keys.Control | Keys.PageDown)) { SelectTab((tab + 1) % TabNames.Length); return true; }
         if (keyData == (Keys.Control | Keys.Shift | Keys.Tab) || keyData == (Keys.Control | Keys.PageUp)) { SelectTab((tab + TabNames.Length - 1) % TabNames.Length); return true; }
         return base.ProcessCmdKey(ref msg, keyData);
@@ -919,6 +1114,12 @@ internal class DcControl : Control {
         DoubleBuffered = true;
     }
     protected int S(double v) { return F.S(v); }
+    protected bool CtrlWheel(MouseEventArgs e) {
+        if ((Control.ModifierKeys & Keys.Control) == 0) return false;
+        F.ScaleStep(e.Delta > 0 ? 1 : -1);
+        return true;
+    }
+    protected override void OnMouseWheel(MouseEventArgs e) { if (!CtrlWheel(e)) base.OnMouseWheel(e); }
     protected static Graphics Prep(PaintEventArgs e) {
         Graphics g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -929,10 +1130,77 @@ internal class DcControl : Control {
 
 // ------------------------------------------------------------ шапка
 internal class DcHeader : DcControl {
+    // кнопки шапки: 0 мельче, 1 масштаб (сброс), 2 крупнее, 3 поверх всех окон, 4 справка
+    readonly Rectangle[] btn = new Rectangle[5];
+    int hover = -1, pressed = -1;
+    static readonly string[] Tips = { "Мельче (Ctrl −)", "Обычный масштаб (Ctrl+0)", "Крупнее (Ctrl +)", "Поверх всех окон (Ctrl+T)", "Горячие клавиши (F1)" };
     public DcHeader(DiagChooser f) : base(f) { BackColor = DiagTheme.Panel; }
+
+    int ButtonsLeft() {
+        int bs = S(34), gap = S(6);
+        int x = Width - S(20);
+        x -= bs; btn[4] = new Rectangle(x, (Height - bs) / 2, bs, bs);
+        x -= gap + bs; btn[3] = new Rectangle(x, (Height - bs) / 2, bs, bs);
+        x -= S(14) + bs; btn[2] = new Rectangle(x, (Height - bs) / 2, bs, bs);
+        x -= S(52); btn[1] = new Rectangle(x, (Height - bs) / 2, S(52), bs);
+        x -= bs; btn[0] = new Rectangle(x, (Height - bs) / 2, bs, bs);
+        return x;
+    }
+
+    void DrawBtn(Graphics g, int i) {
+        Rectangle r = btn[i];
+        bool on = i == 3 && F.pinned;
+        bool hov = hover == i, down = pressed == i && hov;
+        bool grp = i <= 2;
+        if (!grp || i == 1) {
+            if (on) DiagTheme.Fill(g, r, S(9), DiagTheme.AccentSoft);
+            else if (down) DiagTheme.Fill(g, r, S(9), DiagTheme.LineHi);
+            else if (hov) DiagTheme.Fill(g, r, S(9), DiagTheme.PlateHi);
+        } else if (hov) DiagTheme.Fill(g, r, S(9), down ? DiagTheme.LineHi : DiagTheme.PlateHi);
+        Color c = on ? DiagTheme.AccentText : (hov ? DiagTheme.Ink : DiagTheme.Ink3);
+        float lw = Math.Max(1.4f, S(1.6));
+        RectangleF ir = new RectangleF(r.X + (r.Width - S(18)) / 2f, r.Y + (r.Height - S(18)) / 2f, S(18), S(18));
+        if (i == 0 || i == 2) {
+            using (Pen p = new Pen(c, lw)) {
+                p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
+                float cx = ir.X + ir.Width / 2f, cy = ir.Y + ir.Height / 2f;
+                g.DrawLine(p, cx - S(5), cy, cx + S(5), cy);
+                if (i == 2) g.DrawLine(p, cx, cy - S(5), cx, cy + S(5));
+            }
+        } else if (i == 1) DiagTheme.TextC(g, ((int)Math.Round(F.uiScale * 100)) + "%", F.fCap, r, c);
+        else DiagGlyph.Draw(g, i == 3 ? 17 : 18, ir, c, lw);
+    }
+
+    int Hit(Point p) { for (int i = 0; i < btn.Length; i++) if (btn[i].Contains(p)) return i; return -1; }
+    protected override void OnMouseMove(MouseEventArgs e) {
+        base.OnMouseMove(e);
+        int h = Hit(e.Location);
+        if (h != hover) {
+            hover = h; Invalidate();
+            Cursor = h >= 0 ? Cursors.Hand : Cursors.Default;
+            try { F.tips.SetToolTip(this, h >= 0 ? Tips[h] : null); } catch (Exception) { }
+        }
+    }
+    protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = -1; pressed = -1; Invalidate(); }
+    protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); if (e.Button == MouseButtons.Left) { pressed = Hit(e.Location); Invalidate(); } }
+    protected override void OnMouseUp(MouseEventArgs e) {
+        base.OnMouseUp(e);
+        int h = Hit(e.Location), p0 = pressed;
+        pressed = -1; Invalidate();
+        if (h < 0 || h != p0) return;
+        if (h == 0) F.ScaleStep(-1);
+        else if (h == 1) F.ScaleStep(0);
+        else if (h == 2) F.ScaleStep(1);
+        else if (h == 3) F.TogglePin();
+        else F.ShowHelp();
+    }
+
     protected override void OnPaint(PaintEventArgs e) {
         Graphics g = Prep(e);
         g.Clear(DiagTheme.Panel);
+        int bl = ButtonsLeft();
+        DiagTheme.Fill(g, new RectangleF(btn[0].X, btn[0].Y, btn[2].Right - btn[0].X, btn[0].Height), S(9), DiagTheme.Soft);
+        for (int i = 0; i < btn.Length; i++) DrawBtn(g, i);
         using (Pen p = new Pen(DiagTheme.Line)) g.DrawLine(p, 0, Height - 1, Width, Height - 1);
         int lx = S(24), ls = S(40);
         DiagGlyph.Logo(g, new RectangleF(lx, (Height - ls) / 2f, ls, ls));
@@ -949,11 +1217,11 @@ internal class DcHeader : DcControl {
             DiagTheme.TextC(g, v, F.fCap, vr, DiagTheme.AccentText);
         }
         int brandW = 0;
-        if (!string.IsNullOrEmpty(DiagChooser.Brand)) {
+        if (!string.IsNullOrEmpty(DiagChooser.Brand) && bl - tx > S(560)) {
             string b = DiagChooser.Brand;
             int bw = Math.Max(DiagTheme.TextW(g, b, F.fBrand), DiagTheme.TextW(g, "компьютерный сервис", F.fSmall));
             brandW = bw + S(16) + S(24);
-            int bx = Width - S(24) - bw;
+            int bx = bl - S(28) - bw;
             int by = (Height - S(36)) / 2;
             DiagTheme.Fill(g, new RectangleF(bx - S(16), by + S(6), S(8), S(8)), S(2), DiagTheme.Accent);
             DiagTheme.Text(g, b, F.fBrand, new Rectangle(bx, by, bw + S(2), S(20)), DiagTheme.Ink);
@@ -962,7 +1230,7 @@ internal class DcHeader : DcControl {
         string tag = DiagTheme.AppTagline;
         if (tag.Length > 0) tag = char.ToUpper(tag[0]) + tag.Substring(1);
         if (!string.IsNullOrEmpty(DiagChooser.MachineInfo)) tag += "   ·   " + DiagChooser.MachineInfo;
-        DiagTheme.Text(g, tag, F.fSmall, new Rectangle(tx, ty + S(29), Math.Max(10, Width - tx - brandW - S(40)), S(18)), DiagTheme.Ink3);
+        DiagTheme.Text(g, tag, F.fSmall, new Rectangle(tx, ty + S(29), Math.Max(10, bl - tx - brandW - S(20)), S(18)), DiagTheme.Ink3);
     }
 }
 
@@ -974,15 +1242,18 @@ internal class DcNav : DcControl {
 
     void Layout0(Graphics g) {
         rects.Clear();
-        int n = DiagChooser.TabNames.Length;
-        int h = Math.Max(S(28), Math.Min(S(38), (Height - S(14) - 2 * S(28) - S(8)) / n - S(2)));
+        int n = DiagChooser.NavOrder.Length;
+        int h = Math.Max(S(26), Math.Min(S(38), (Height - S(14) - 3 * S(28) - S(8)) / n - S(2)));
         int y = S(14), x = S(12), w = Width - S(24);
-        for (int i = 0; i < DiagChooser.TabNames.Length; i++) {
-            if (i == 1 || i == 9) y += S(28);
+        foreach (int i in DiagChooser.NavOrder) {
+            if (GroupTitle(i) != null) y += S(28);
             rects.Add(new KeyValuePair<int, Rectangle>(i, new Rectangle(x, y, w, h)));
             y += h + S(2);
         }
     }
+
+    static string GroupTitle(int i) { return i == 1 ? "ТЕСТЫ" : i == DiagChooser.TabTools ? "СЕРВИС" : i == 10 ? "СПРАВКА" : null; }
+    static int GlyphOf(int i) { return i == 9 ? 11 : i == DiagChooser.TabTools ? 16 : (i > 9 ? i - 1 : i); }
 
     protected override void OnPaint(PaintEventArgs e) {
         Graphics g = Prep(e);
@@ -991,20 +1262,20 @@ internal class DcNav : DcControl {
         Layout0(g);
         foreach (KeyValuePair<int, Rectangle> kv in rects) {
             int i = kv.Key; Rectangle r = kv.Value;
-            if (i == 1 || i == 9)
-                DiagTheme.Text(g, i == 1 ? "ТЕСТЫ" : "СПРАВКА", F.fCap, new Rectangle(r.X + S(12), r.Y - S(22), r.Width, S(18)), DiagTheme.Ink4);
+            if (GroupTitle(i) != null)
+                DiagTheme.Text(g, GroupTitle(i), F.fCap, new Rectangle(r.X + S(12), r.Y - S(22), r.Width, S(18)), DiagTheme.Ink4);
             bool sel = i == F.tab, hov = i == hover;
             if (sel) {
                 DiagTheme.Fill(g, r, S(12), DiagTheme.AccentSoft);
                 DiagTheme.Fill(g, new RectangleF(r.X, r.Y + S(10), S(3), r.Height - S(20)), S(1.5), DiagTheme.Accent);
             } else if (hov) DiagTheme.Fill(g, r, S(12), DiagTheme.PlateHi);
             Color ic = sel ? DiagTheme.AccentText : (hov ? DiagTheme.Ink : DiagTheme.Ink3);
-            DiagGlyph.Draw(g, i == 9 ? 11 : (i > 9 ? i - 1 : i), new RectangleF(r.X + S(14), r.Y + (r.Height - S(18)) / 2f, S(18), S(18)), ic, Math.Max(1.3f, S(1.5)));
+            DiagGlyph.Draw(g, GlyphOf(i), new RectangleF(r.X + S(14), r.Y + (r.Height - S(18)) / 2f, S(18), S(18)), ic, Math.Max(1.3f, S(1.5)));
             string badge = "";
             if (i >= 1 && i <= 8) {
                 int on, total; F.CatCount(i, out on, out total);
                 badge = on + "/" + total;
-            } else if (i == 0) badge = F.mode == 0 ? "быстрая" : F.mode == 1 ? "полная" : "выборочная";
+            } else if (i == 0) badge = F.mode == 0 ? "быстрая" : F.mode == 1 ? "полная" : F.mode == 3 ? "по жалобе" : "выборочная";
             int bw = 0;
             if (badge.Length > 0) {
                 bw = DiagTheme.TextW(g, badge, F.fCap) + S(14);
@@ -1018,7 +1289,7 @@ internal class DcNav : DcControl {
                 new Rectangle(r.X + S(44), r.Y, r.Width - S(44) - bw - S(14), r.Height), sel || hov ? DiagTheme.Ink : DiagTheme.Ink2);
         }
         if (rects.Count > 0 && rects[rects.Count - 1].Value.Bottom + S(60) < Height)
-            DiagTheme.Wrap(g, "Ctrl+Tab — следующий раздел\nEnter — начать · Esc — отмена", F.fSmall,
+            DiagTheme.Wrap(g, "F1 — горячие клавиши\nEnter — начать · Esc — отмена", F.fSmall,
                 new Rectangle(S(24), Height - S(48), Width - S(36), S(40)), DiagTheme.Ink4);
     }
 
@@ -1069,7 +1340,7 @@ internal class DcBottom : DcControl {
         if (x + S(150) < rCancel.X) {
             using (Pen p = new Pen(DiagTheme.Line)) g.DrawLine(p, x - S(14), S(18), x - S(14), Height - S(18));
             DiagTheme.Text(g, "РЕЖИМ", F.fCap, new Rectangle(x, S(16), S(150), S(16)), DiagTheme.Ink4);
-            string m = F.mode == 0 ? "Быстрая" : F.mode == 1 ? "Полная" : "Выборочная";
+            string m = F.mode == 0 ? "Быстрая" : F.mode == 1 ? "Полная" : F.mode == 3 ? "По жалобе" : "Выборочная";
             DiagTheme.Text(g, m, F.fH3, new Rectangle(x, S(34), S(160), S(30)), F.mode == 2 ? DiagTheme.Warn : DiagTheme.Ink);
         }
         // кнопки
@@ -1155,6 +1426,7 @@ internal class DcPage : DcControl {
             case 0:
                 y = Title(g, y, "Режим диагностики", "Выберите готовый набор проверок или настройте тесты по разделам слева. Отчёт сохранится на Рабочий стол.");
                 y = ModeCards(g, y);
+                if (F.mode == 3) y = ComplaintList(g, y);
                 y = Section(g, y, "Что войдёт в проверку");
                 y = CatTiles(g, y);
                 break;
@@ -1173,7 +1445,7 @@ internal class DcPage : DcControl {
                 y = Rows(g, y, 3);
                 break;
             case 4:
-                y = Title(g, y, "Питание", "Проверка блока питания совместной нагрузкой процессора и видеокарты.");
+                y = Title(g, y, "Питание", "Блок питания под совместной нагрузкой процессора и видеокарты; аккумулятор ноутбука.");
                 y = Rows(g, y, 4);
                 if (F.isLaptop) y = Note(g, y, 1, "Это ноутбук: блок питания и цепи питания рассчитаны с небольшим запасом. Тест доступен, но запускайте осторожно — с подключённой зарядкой и короткой длительностью.");
                 y = Note(g, y, 2, "ТемпературныйНюхач каждую секунду следит за температурами и напряжениями и остановит тест при аномалии — до того, как она навредит железу.");
@@ -1213,6 +1485,9 @@ internal class DcPage : DcControl {
                 break;
             case 11:
                 y = About(g, y);
+                break;
+            case DiagChooser.TabTools:
+                y = Tools(g, y);
                 break;
         }
         contentH = y + S(32);
@@ -1452,29 +1727,33 @@ internal class DcPage : DcControl {
     }
 
     int ModeCards(Graphics g, int y) {
-        string[] titles = { "Быстрая", "Полная", "Выборочная" };
+        // порядок карточек: быстрая, полная, по жалобе, выборочная (номера режимов 0, 1, 3, 2)
+        int[] modes = { 0, 1, 3, 2 };
+        string[] titles = { "Быстрая", "Полная", "По жалобе", "Выборочная" };
         string[] descs = {
             "Все проверки с короткими стресс-тестами. Для приёмки и первичного осмотра.",
             "Долгие стресс-тесты, TestMem5, видеопамять и проверка Windows. Для плавающих неисправностей.",
+            "Отметьте, на что жалуется клиент, — программа добавит нужные тесты и назовёт вероятную причину.",
             "Только отмеченные тесты со своей длительностью. Любое изменение в разделах включает этот режим." };
         string[][] bullets = {
             new string[] { "Стресс-тесты по 1–3 мин", "Тест ОЗУ, самотест SMART", "Журналы, сеть, периферия" },
             new string[] { "Стресс-тесты по 5–10 мин", "TestMem5, видеопамять", "DISM, SFC, CHKDSK" },
+            new string[] { "Быстрая + тесты под жалобу", "Вероятные причины в отчёте", "Список жалоб — ниже" },
             new string[] { "Любой набор тестов", "Своя длительность каждого", "Настройка в разделах слева" } };
-        int[] glyph = { 4, 14, 0 };
-        int gap = S(16);
-        bool horiz = cw >= S(600);
-        int w = horiz ? (cw - 2 * gap) / 3 : cw;
+        int[] glyph = { 4, 14, 13, 0 };
+        int n = 4, gap = S(16);
+        int cols = cw >= S(1000) ? 4 : (cw >= S(520) ? 2 : 1);
+        int w = (cw - (cols - 1) * gap) / cols;
         int descMax = 0;
-        for (int i = 0; i < 3; i++) descMax = Math.Max(descMax, DiagTheme.WrapH(g, descs[i], F.fBody, w - S(40)));
+        for (int i = 0; i < n; i++) descMax = Math.Max(descMax, DiagTheme.WrapH(g, descs[i], F.fBody, w - S(40)));
         int h = S(20) + S(40) + S(14) + S(28) + S(30) + S(8) + descMax + S(16) + 3 * S(24) + S(18);
-        for (int i = 0; i < 3; i++) {
-            int idx = i;
-            Rectangle r = horiz ? new Rectangle(cx + i * (w + gap), y, w, h) : new Rectangle(cx, y + i * (h + gap), w, h);
-            Blk b = AddBlk(r, null, delegate(Point p) { F.SetMode(idx); });
+        for (int i = 0; i < n; i++) {
+            int idx = i, md = modes[i];
+            Rectangle r = new Rectangle(cx + (i % cols) * (w + gap), y + (i / cols) * (h + gap), w, h);
+            Blk b = AddBlk(r, null, delegate(Point p) { F.SetMode(md); });
             b.Live = true;
             b.Paint = delegate(Graphics gg, Rectangle rr) {
-                bool sel = F.mode == idx, hov = Hov(rr);
+                bool sel = F.mode == md, hov = Hov(rr);
                 DiagTheme.Fill(gg, rr, S(20), sel ? Color.FromArgb(0x1f, 0x14, 0x14) : (hov ? DiagTheme.PlateHi : DiagTheme.Panel));
                 if (sel) {
                     using (GraphicsPath gp = DiagTheme.Round(rr, S(20)))
@@ -1495,8 +1774,8 @@ internal class DcPage : DcControl {
                 yy += S(40) + S(14);
                 DiagTheme.Text(gg, titles[idx], F.fH2, new Rectangle(x, yy, rr.Width - S(40), S(28)), DiagTheme.Ink);
                 yy += S(28);
-                double m = idx == 2 ? F.TotalMinutes() : F.PresetMinutes(idx == 1);
-                string tt = idx == 2 && F.mode != 2 ? "свой набор" : DiagChooser.FmtTime(m);
+                double m = md >= 2 ? F.TotalMinutes() : F.PresetMinutes(md == 1);
+                string tt = md == 2 && F.mode != 2 ? "свой набор" : (md == 3 && F.mode != 3 ? "под жалобу" : DiagChooser.FmtTime(m));
                 DiagTheme.Text(gg, tt, F.fH3, new Rectangle(x, yy, rr.Width - S(40), S(30)), sel ? DiagTheme.AccentText : DiagTheme.Ink2);
                 yy += S(30) + S(8);
                 DiagTheme.Wrap(gg, descs[idx], F.fBody, new Rectangle(x, yy, rr.Width - S(40), descMax + S(2)), DiagTheme.Ink3);
@@ -1508,7 +1787,89 @@ internal class DcPage : DcControl {
                 }
             };
         }
-        return y + (horiz ? h : 3 * h + 2 * gap) + S(28);
+        int rows = (n + cols - 1) / cols;
+        return y + rows * h + (rows - 1) * gap + S(28);
+    }
+
+    // ---------- список жалоб (режим «По жалобе»)
+    int ComplaintList(Graphics g, int y) {
+        y = Section(g, y - S(8), "Жалобы клиента — отметьте одну или несколько");
+        string[] items = DiagChooser.Complaints;
+        if (items == null || items.Length == 0) {
+            return Note(g, y, 1, "Список жалоб недоступен в этой версии — будет выполнена быстрая проверка.");
+        }
+        int cols = cw >= S(700) ? 2 : 1, gap = S(10);
+        int w = (cw - (cols - 1) * gap) / cols, h = S(48);
+        int i = 0;
+        foreach (string raw in items) {
+            string[] c = DiagChooser.ComplaintParts(raw);
+            if (c[0].Length == 0) continue;
+            string key = c[0], title = c[1].Length > 0 ? c[1] : c[0];
+            Rectangle r = new Rectangle(cx + (i % cols) * (w + gap), y + (i / cols) * (h + gap), w, h);
+            Blk b = AddBlk(r, null, delegate(Point p) { F.ToggleComplaint(key); });
+            b.Live = true;
+            b.Paint = delegate(Graphics gg, Rectangle rr) {
+                bool on = F.complaintSel.Contains(key), hov = Hov(rr);
+                DiagTheme.Fill(gg, rr, S(12), on ? Color.FromArgb(0x24, 0x15, 0x14) : (hov ? DiagTheme.PlateHi : DiagTheme.Panel));
+                DiagTheme.Stroke(gg, new RectangleF(rr.X + 0.5f, rr.Y + 0.5f, rr.Width - 1, rr.Height - 1), S(12), on ? Color.FromArgb(0x7a, 0x22, 0x1e) : (hov ? DiagTheme.LineHi : DiagTheme.Line), 1f);
+                Rectangle cb = new Rectangle(rr.X + S(16), rr.Y + (rr.Height - S(22)) / 2, S(22), S(22));
+                if (on) {
+                    DiagTheme.FillAccent(gg, cb, S(6), false);
+                    DiagGlyph.Draw(gg, 12, new RectangleF(cb.X + S(4), cb.Y + S(4), S(14), S(14)), Color.White, Math.Max(1.6f, S(2.2)));
+                } else {
+                    DiagTheme.Fill(gg, cb, S(6), DiagTheme.Bg);
+                    DiagTheme.Stroke(gg, new RectangleF(cb.X + 0.5f, cb.Y + 0.5f, cb.Width - 1, cb.Height - 1), S(6), DiagTheme.Ink4, Math.Max(1.2f, S(1.4)));
+                }
+                DiagTheme.Text(gg, title, on ? F.fSemiS : F.fBody, new Rectangle(rr.X + S(50), rr.Y, rr.Width - S(62), rr.Height), on ? DiagTheme.Ink : DiagTheme.Ink2);
+            };
+            i++;
+        }
+        int rows = (i + cols - 1) / cols;
+        return y + rows * h + Math.Max(0, rows - 1) * gap + S(24);
+    }
+
+    // ---------- «Инструменты»
+    int ToolCard(Graphics g, int y, int glyph, string title, string text, string btnText, ClickFn act) {
+        int ix = S(76), bw = S(170);
+        int th = DiagTheme.WrapH(g, text, F.fBody, cw - ix - bw - S(48));
+        Rectangle r = new Rectangle(cx, y, cw, Math.Max(S(96), S(16) + S(26) + th + S(20)));
+        Rectangle br = new Rectangle(r.Right - S(20) - bw, r.Y + (r.Height - S(40)) / 2, bw, S(40));
+        Blk b = AddBlk(r, null, null);
+        b.Live = true;
+        b.Paint = delegate(Graphics gg, Rectangle rr) {
+            DiagTheme.Fill(gg, rr, S(16), DiagTheme.Panel);
+            DiagTheme.Stroke(gg, new RectangleF(rr.X + 0.5f, rr.Y + 0.5f, rr.Width - 1, rr.Height - 1), S(16), DiagTheme.Line, 1f);
+            Rectangle ic = new Rectangle(rr.X + S(20), rr.Y + S(18), S(40), S(40));
+            DiagTheme.Fill(gg, ic, S(12), Color.FromArgb(28, DiagTheme.AccentText));
+            DiagGlyph.Draw(gg, glyph, new RectangleF(ic.X + S(10), ic.Y + S(10), S(20), S(20)), DiagTheme.AccentText, Math.Max(1.4f, S(1.7)));
+            DiagTheme.Text(gg, title, F.fH3, new Rectangle(rr.X + ix, rr.Y + S(16), rr.Width - ix - bw - S(48), S(26)), DiagTheme.Ink);
+            DiagTheme.Wrap(gg, text, F.fBody, new Rectangle(rr.X + ix, rr.Y + S(44), rr.Width - ix - bw - S(48), th + S(2)), DiagTheme.Ink3);
+            bool hov = Hov(br);
+            DiagTheme.Fill(gg, br, S(12), hov ? DiagTheme.PlateHi : DiagTheme.Soft);
+            DiagTheme.Stroke(gg, new RectangleF(br.X + 0.5f, br.Y + 0.5f, br.Width - 1, br.Height - 1), S(12), hov ? DiagTheme.AccentText : DiagTheme.LineHi, 1f);
+            DiagTheme.TextC(gg, btnText, F.fSemiS, br, hov ? DiagTheme.Ink : DiagTheme.Ink2);
+        };
+        AddBlk(br, null, act);
+        return r.Bottom + S(12);
+    }
+
+    int Tools(Graphics g, int y) {
+        y = Title(g, y, "Инструменты", "Служебные утилиты мастера. Запускаются в отдельном окне и не входят в диагностику.");
+        y = ToolCard(g, y, 16, "Флешка MemTest86",
+            "Записывает загрузочную флешку MemTest86 — самая надёжная проверка оперативной памяти вне Windows. Все данные на флешке будут стёрты.",
+            "Создать флешку", delegate(Point p) { F.StartTool("memtest86usb", "Флешка MemTest86"); });
+        y = ToolCard(g, y, 9, "Спасательная флешка WinPE",
+            "Загрузочная флешка " + DiagTheme.AppName + " на WinPE — для компьютеров, где Windows не загружается: диагностика и спасение файлов. Понадобится Windows ADK (скачается).",
+            "Создать флешку", delegate(Point p) { F.StartTool("rescueusb", "Спасательная флешка WinPE"); });
+        y = ToolCard(g, y, 19, "Папка с отчётами",
+            "Все сохранённые отчёты этой программы. Копии также лежат на Рабочем столе.",
+            "Открыть папку", delegate(Point p) { F.OpenReports(); });
+        y = ToolCard(g, y, 11, "История проверок",
+            "Прежние диагностики этого компьютера — чтобы сравнить состояние с прошлым разом.",
+            "Показать", delegate(Point p) { F.SelectTab(DiagChooser.TabHistory); });
+        y = Section(g, y, "Удалённая диагностика");
+        y = Rows(g, y, DiagChooser.TabTools);
+        return y;
     }
 
     int CatTiles(Graphics g, int y) {
@@ -1816,7 +2177,7 @@ internal class DcPage : DcControl {
     }
 
     protected override void OnMouseWheel(MouseEventArgs e) {
-        base.OnMouseWheel(e);
+        if (CtrlWheel(e)) return;
         ScrollTo(scroll - e.Delta * S(64) / 120);
     }
 
@@ -1879,5 +2240,451 @@ internal class DcPage : DcControl {
         else if (e.KeyCode == Keys.PageUp) ScrollTo(scroll - Height * 3 / 4);
         else if (e.KeyCode == Keys.Home) ScrollTo(0);
         else if (e.KeyCode == Keys.End) ScrollTo(MaxScroll);
+    }
+}
+
+// ======================================================================
+// Фирменные кнопки, диалоги, заставка и справка по клавишам.
+// Диалоги заменяют консольные вопросы (body.ps1: AskYN, DiagUi.Ask).
+// Владелец диалога — онлайн-окно DiagLive (если открыто), иначе экран под курсором.
+// ======================================================================
+public class DiagButton : Button {
+    public int Kind;                       // 0 главная (красная), 1 обычная, 2 тихая
+    public Color Back = DiagTheme.Panel;   // цвет под кнопкой (уголки)
+    public float Radius = 10f;
+    bool hov, down;
+    public DiagButton() {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderSize = 0;
+        UseVisualStyleBackColor = false;
+        Cursor = Cursors.Hand;
+        ForeColor = DiagTheme.Ink;
+        AccessibleRole = AccessibleRole.PushButton;
+    }
+    protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); if (string.IsNullOrEmpty(AccessibleName) || AccessibleName == Text) AccessibleName = Text; Invalidate(); }
+    protected override void OnMouseEnter(EventArgs e) { hov = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { hov = false; down = false; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) { down = true; Invalidate(); } base.OnMouseDown(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { down = false; Invalidate(); base.OnMouseUp(e); }
+    protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.Clear(Back);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        float k = Math.Max(1f, g.DpiX / 96f);
+        RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+        float rad = Math.Min(Radius * k, r.Height / 2f);
+        Color tc;
+        if (!Enabled) { DiagTheme.Fill(g, r, rad, DiagTheme.Soft); tc = DiagTheme.Ink4; }
+        else if (Kind == 0) {
+            if (down) DiagTheme.Fill(g, r, rad, DiagTheme.AccentLo); else DiagTheme.FillAccent(g, r, rad, hov);
+            tc = Color.White;
+        } else if (Kind == 1) {
+            DiagTheme.Fill(g, r, rad, down ? DiagTheme.LineHi : (hov ? DiagTheme.PlateHi : DiagTheme.Soft));
+            DiagTheme.Stroke(g, r, rad, hov ? DiagTheme.Ink4 : DiagTheme.LineHi, 1f);
+            tc = hov ? DiagTheme.Ink : DiagTheme.Ink2;
+        } else {
+            if (hov || down) DiagTheme.Fill(g, r, rad, down ? DiagTheme.LineHi : DiagTheme.PlateHi);
+            tc = hov ? DiagTheme.Ink : DiagTheme.Ink3;
+        }
+        if (Focused && ShowFocusCues && Enabled) {
+            float d = 2.5f * k;
+            DiagTheme.Stroke(g, new RectangleF(r.X + d, r.Y + d, r.Width - 2 * d, r.Height - 2 * d), Math.Max(2f, rad - d),
+                Kind == 0 ? Color.FromArgb(200, 255, 255, 255) : DiagTheme.AccentText, Math.Max(1f, 1.2f * k));
+        }
+        TextRenderer.DrawText(g, Text, Font, new Rectangle(0, 0, Width, Height), tc,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+    }
+}
+
+public class DiagDialog : Form {
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out WinRect r);
+    [DllImport("user32.dll")] static extern bool ReleaseCapture();
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int val, int size);
+    [StructLayout(LayoutKind.Sequential)] struct WinRect { public int L, T, R, B; }
+
+    class HwndOwner : IWin32Window {
+        readonly IntPtr h;
+        public HwndOwner(IntPtr x) { h = x; }
+        public IntPtr Handle { get { return h; } }
+    }
+
+    // Окно онлайн-диагностики (класс DiagLive компилируется отдельно — ищем через отражение)
+    internal static IntPtr LiveHandle() {
+        try {
+            foreach (System.Reflection.Assembly a in AppDomain.CurrentDomain.GetAssemblies()) {
+                Type t = null;
+                try { t = a.GetType("DiagLive", false); } catch (Exception) { }
+                if (t == null) continue;
+                System.Reflection.PropertyInfo pi = t.GetProperty("FormHandle", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (pi == null) continue;
+                object v = pi.GetValue(null, null);
+                if (v is IntPtr) return (IntPtr)v;
+            }
+        } catch (Exception) { }
+        return IntPtr.Zero;
+    }
+
+    readonly string title, text;
+    readonly int kind;
+    int result = -1;
+    readonly float k;
+    readonly Font fT, fB, fC;
+    readonly int pad, iconS, textX, textW, titleH, bodyH, top;
+    TextBox box;
+
+    int S(double v) { return (int)Math.Round(v * k); }
+
+    DiagDialog(string title, string text, string[] buttons, int kind, int def, int cancel) {
+        this.title = title ?? "";
+        this.text = (text ?? "").Replace("\r\n", "\n").Replace("\n", "\r\n");
+        this.kind = kind;
+        k = 1f;
+        try { using (Graphics g0 = CreateGraphics()) k = Math.Max(1f, g0.DpiX / 96f); } catch (Exception) { }
+        AutoScaleMode = AutoScaleMode.None;
+        FormBorderStyle = FormBorderStyle.None;
+        StartPosition = FormStartPosition.Manual;
+        TopMost = true;
+        KeyPreview = true;
+        DoubleBuffered = true;
+        BackColor = DiagTheme.Panel;
+        ForeColor = DiagTheme.Ink;
+        Text = string.IsNullOrEmpty(this.title) ? DiagTheme.AppName : this.title;
+        AccessibleName = Text;
+        AccessibleDescription = this.text;
+        if (DiagChooser.AppIcon != null) Icon = DiagChooser.AppIcon;
+        fT = DiagTheme.Head(12.5f); fB = DiagTheme.Body(10f); fC = DiagTheme.Semi(8f);
+        Font = DiagTheme.Semi(10f);
+
+        int W = S(540);
+        pad = S(26); iconS = S(40);
+        textX = pad + iconS + S(16);
+        textW = W - textX - pad;
+        using (Graphics g = CreateGraphics()) {
+            titleH = Math.Max(S(24), DiagTheme.WrapH(g, this.title, fT, textW));
+            bodyH = DiagTheme.WrapH(g, this.text, fB, textW);
+            if (bodyH > S(300) || this.text.Length > 900) {
+                W = S(680); textW = W - textX - pad;
+                titleH = Math.Max(S(24), DiagTheme.WrapH(g, this.title, fT, textW));
+                bodyH = S(280);
+                box = new TextBox();
+                box.Multiline = true; box.ReadOnly = true; box.ScrollBars = ScrollBars.Vertical; box.WordWrap = true;
+                box.BorderStyle = BorderStyle.None; box.BackColor = DiagTheme.Bg; box.ForeColor = DiagTheme.Ink2;
+                box.Font = new Font("Consolas", 9f); box.Text = this.text; box.TabStop = true;
+            }
+        }
+        top = S(56);
+        int contentH = Math.Max(iconS, titleH + (this.text.Length > 0 ? S(8) + bodyH : 0));
+        int btnH = S(40), btnY = top + contentH + S(26);
+        int H = btnY + btnH + S(22);
+        ClientSize = new Size(W, H);
+        if (box != null) { box.Bounds = new Rectangle(textX + S(8), top + titleH + S(16), textW - S(16), bodyH - S(16)); Controls.Add(box); }
+
+        int x = W - pad;
+        DiagButton[] bs = new DiagButton[buttons.Length];
+        for (int i = buttons.Length - 1; i >= 0; i--) {
+            DiagButton b = new DiagButton();
+            b.Text = buttons[i];
+            b.Font = Font;
+            b.Kind = i == 0 ? 0 : 1;
+            b.Back = DiagTheme.Panel;
+            int bw;
+            using (Graphics g = CreateGraphics()) bw = Math.Max(S(112), DiagTheme.TextW(g, buttons[i], Font) + S(40));
+            x -= bw;
+            b.Bounds = new Rectangle(x, btnY, bw, btnH);
+            x -= S(10);
+            int idx = i;
+            b.Click += delegate { result = idx; DialogResult = DialogResult.OK; Close(); };
+            bs[i] = b;
+            Controls.Add(b);
+        }
+        for (int i = 0; i < bs.Length; i++) bs[i].TabIndex = i;
+        if (def >= 0 && def < bs.Length) { AcceptButton = bs[def]; ActiveControl = bs[def]; }
+        if (cancel >= 0 && cancel < bs.Length) CancelButton = bs[cancel];
+    }
+
+    protected override CreateParams CreateParams {
+        get { CreateParams cp = base.CreateParams; cp.ClassStyle |= 0x20000; return cp; }   // тень
+    }
+
+    protected override void OnHandleCreated(EventArgs e) {
+        base.OnHandleCreated(e);
+        try { int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, 4); } catch (Exception) { }
+    }
+
+    protected override void OnShown(EventArgs e) {
+        base.OnShown(e);
+        try { Activate(); if (ActiveControl != null) ActiveControl.Focus(); } catch (Exception) { }
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData) {
+        if (keyData == Keys.Escape && CancelButton == null) { result = -1; DialogResult = DialogResult.Cancel; Close(); return true; }
+        if (keyData == (Keys.Control | Keys.C) && (box == null || !box.Focused)) {
+            try { Clipboard.SetText(title + "\r\n\r\n" + text); } catch (Exception) { }
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e) {
+        base.OnMouseDown(e);
+        if (e.Button == MouseButtons.Left) { try { ReleaseCapture(); SendMessage(Handle, 0xA1, (IntPtr)2, IntPtr.Zero); } catch (Exception) { } }
+    }
+
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(DiagTheme.Panel);
+        // шапка: логотип и название программы
+        using (SolidBrush b = new SolidBrush(DiagTheme.Accent)) g.FillRectangle(b, 0, 0, Width, S(3));
+        DiagGlyph.Logo(g, new RectangleF(pad, S(16), S(22), S(22)));
+        DiagTheme.Text(g, DiagTheme.AppName, fC, new Rectangle(pad + S(30), S(16), S(300), S(22)), DiagTheme.Ink3);
+        using (Pen p = new Pen(DiagTheme.Line)) g.DrawLine(p, pad, S(46), Width - pad, S(46));
+        // значок
+        Color kc = kind == 0 ? DiagTheme.AccentText : kind == 1 ? DiagTheme.Ink2 : kind == 2 ? DiagTheme.Warn : kind == 3 ? DiagTheme.Crit : DiagTheme.Ok;
+        Rectangle ic = new Rectangle(pad, top, iconS, iconS);
+        using (SolidBrush b = new SolidBrush(Color.FromArgb(36, kc))) g.FillEllipse(b, ic);
+        float lw = Math.Max(1.8f, S(2.2));
+        using (Pen p = new Pen(kc, lw)) {
+            p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
+            float cx = ic.X + ic.Width / 2f, cy = ic.Y + ic.Height / 2f, s = ic.Width;
+            if (kind == 0) {
+                g.DrawArc(p, cx - s * 0.13f, cy - s * 0.27f, s * 0.26f, s * 0.24f, 180, 250);
+                g.DrawLine(p, cx + s * 0.02f, cy - s * 0.02f, cx, cy + s * 0.08f);
+                using (SolidBrush b = new SolidBrush(kc)) g.FillEllipse(b, cx - s * 0.045f, cy + s * 0.17f, s * 0.09f, s * 0.09f);
+            } else if (kind == 1) {
+                g.DrawLine(p, cx, cy - s * 0.04f, cx, cy + s * 0.2f);
+                using (SolidBrush b = new SolidBrush(kc)) g.FillEllipse(b, cx - s * 0.045f, cy - s * 0.24f, s * 0.09f, s * 0.09f);
+            } else if (kind == 2) {
+                g.DrawLine(p, cx, cy - s * 0.22f, cx, cy + s * 0.06f);
+                using (SolidBrush b = new SolidBrush(kc)) g.FillEllipse(b, cx - s * 0.045f, cy + s * 0.14f, s * 0.09f, s * 0.09f);
+            } else if (kind == 3) {
+                g.DrawLine(p, cx - s * 0.15f, cy - s * 0.15f, cx + s * 0.15f, cy + s * 0.15f);
+                g.DrawLine(p, cx - s * 0.15f, cy + s * 0.15f, cx + s * 0.15f, cy - s * 0.15f);
+            } else DiagGlyph.Draw(g, 12, new RectangleF(ic.X + s * 0.22f, ic.Y + s * 0.22f, s * 0.56f, s * 0.56f), kc, lw);
+        }
+        DiagTheme.Wrap(g, title, fT, new Rectangle(textX, top + S(6), textW, titleH + S(4)), DiagTheme.Ink);
+        if (box != null) DiagTheme.Fill(g, new RectangleF(textX, top + titleH + S(8), textW, bodyH), S(8), DiagTheme.Bg);
+        else if (text.Length > 0) DiagTheme.Wrap(g, text, fB, new Rectangle(textX, top + titleH + S(14), textW, bodyH + S(4)), DiagTheme.Ink2);
+        DiagTheme.Stroke(g, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 0f, DiagTheme.LineHi, 1f);
+    }
+
+    // Показать диалог: владелец — указанное окно, иначе окно DiagLive, иначе экран под курсором
+    internal static int Run(IWin32Window owner, string title, string text, string[] buttons, int kind, int def, int cancel) {
+        try {
+            using (DiagDialog d = new DiagDialog(title, text, buttons, kind, def, cancel)) {
+                Rectangle area = Rectangle.Empty;
+                IntPtr oh = owner != null ? owner.Handle : LiveHandle();
+                WinRect rc;
+                bool useOwner = oh != IntPtr.Zero && IsWindowVisible(oh) && !IsIconic(oh) && GetWindowRect(oh, out rc) && (area = Rectangle.FromLTRB(rc.L, rc.T, rc.R, rc.B)).Width > 0;
+                if (!useOwner) area = Screen.FromPoint(Cursor.Position).WorkingArea;
+                Rectangle wa = Screen.FromRectangle(area).WorkingArea;
+                int x = area.X + (area.Width - d.Width) / 2, y = area.Y + (area.Height - d.Height) / 2;
+                x = Math.Max(wa.X, Math.Min(x, wa.Right - d.Width)); y = Math.Max(wa.Y, Math.Min(y, wa.Bottom - d.Height));
+                d.Location = new Point(x, y);
+                d.ShowInTaskbar = !useOwner;
+                if (useOwner) d.ShowDialog(owner != null ? owner : new HwndOwner(oh)); else d.ShowDialog();
+                return d.result;
+            }
+        } catch (Exception) {
+            DialogResult r = MessageBox.Show(text, title, buttons.Length > 1 ? MessageBoxButtons.YesNo : MessageBoxButtons.OK);
+            return (r == DialogResult.Yes || r == DialogResult.OK) ? 0 : 1;
+        }
+    }
+
+    public static bool Ask(string title, string text, string yes, string no) { return Run(null, title, text, new string[] { yes, no }, 0, 0, 1) == 0; }
+    public static bool Ask(string title, string text, string yes, string no, bool defaultYes) { return Run(null, title, text, new string[] { yes, no }, 0, defaultYes ? 0 : 1, 1) == 0; }
+    public static void Info(string title, string text) { Run(null, title, text, new string[] { "OK" }, 1, 0, 0); }
+    public static void Warning(string title, string text) { Run(null, title, text, new string[] { "OK" }, 2, 0, 0); }
+    public static void Error(string title, string text) { Run(null, title, text, new string[] { "Закрыть" }, 3, 0, 0); }
+    // Выбор из нескольких вариантов: индекс кнопки, -1 — закрыли (Esc)
+    public static int Choice(string title, string text, string[] options) { return Run(null, title, text, options, 0, 0, -1); }
+    public static int ChoiceOn(IWin32Window owner, string title, string text, string[] options) { return Run(owner, title, text, options, 0, 0, -1); }
+    public static bool AskOn(IWin32Window owner, string title, string text, string yes, string no) { return Run(owner, title, text, new string[] { yes, no }, 0, 0, 1) == 0; }
+    public static void InfoOn(IWin32Window owner, string title, string text) { Run(owner, title, text, new string[] { "OK" }, 1, 0, 0); }
+}
+
+// Справка по горячим клавишам (F1): строки { "клавиши", "что делает" }
+public class DiagHelpForm : Form {
+    readonly string title;
+    readonly string[][] rows;
+    readonly float k;
+    readonly Font fT, fK, fD;
+    int S(double v) { return (int)Math.Round(v * k); }
+
+    DiagHelpForm(string title, string[][] rows) {
+        this.title = title; this.rows = rows;
+        k = 1f;
+        try { using (Graphics g0 = CreateGraphics()) k = Math.Max(1f, g0.DpiX / 96f); } catch (Exception) { }
+        AutoScaleMode = AutoScaleMode.None;
+        FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual; ShowInTaskbar = false;
+        KeyPreview = true; DoubleBuffered = true; TopMost = true; BackColor = DiagTheme.Panel;
+        Text = title; AccessibleName = title;
+        fT = DiagTheme.Head(13f); fK = DiagTheme.Semi(9f); fD = DiagTheme.Body(9.5f);
+        ClientSize = new Size(S(560), S(92) + rows.Length * S(34) + S(40));
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        foreach (string[] r in rows) sb.Append(r[0]).Append(" — ").Append(r[1]).Append("; ");
+        AccessibleDescription = sb.ToString();
+    }
+    protected override CreateParams CreateParams { get { CreateParams cp = base.CreateParams; cp.ClassStyle |= 0x20000; return cp; } }
+    protected override void OnKeyDown(KeyEventArgs e) { base.OnKeyDown(e); Close(); }
+    protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); Close(); }
+    protected override void OnDeactivate(EventArgs e) { base.OnDeactivate(e); try { Close(); } catch (Exception) { } }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(DiagTheme.Panel);
+        using (SolidBrush b = new SolidBrush(DiagTheme.Accent)) g.FillRectangle(b, 0, 0, Width, S(3));
+        DiagGlyph.Logo(g, new RectangleF(S(26), S(22), S(30), S(30)));
+        DiagTheme.Text(g, title, fT, new Rectangle(S(68), S(20), Width - S(90), S(34)), DiagTheme.Ink);
+        int y = S(72);
+        foreach (string[] r in rows) {
+            int x = S(26);
+            foreach (string key in r[0].Split(new string[] { " / " }, StringSplitOptions.None)) {
+                int w = DiagTheme.TextW(g, key, fK) + S(18);
+                Rectangle kr = new Rectangle(x, y + S(4), w, S(24));
+                DiagTheme.Fill(g, kr, S(6), DiagTheme.Soft);
+                DiagTheme.Stroke(g, new RectangleF(kr.X + 0.5f, kr.Y + 0.5f, kr.Width - 1, kr.Height - 1), S(6), DiagTheme.LineHi, 1f);
+                DiagTheme.TextC(g, key, fK, kr, DiagTheme.Ink);
+                x += w + S(6);
+            }
+            DiagTheme.Text(g, r[1], fD, new Rectangle(Math.Max(x + S(8), S(230)), y, Width - Math.Max(x + S(8), S(230)) - S(20), S(32)), DiagTheme.Ink2);
+            y += S(34);
+        }
+        DiagTheme.Text(g, "Любая клавиша или щелчок — закрыть", fD, new Rectangle(S(26), Height - S(38), Width - S(52), S(24)), DiagTheme.Ink4);
+        DiagTheme.Stroke(g, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 0f, DiagTheme.LineHi, 1f);
+    }
+    public static void ShowFor(IWin32Window owner, Rectangle ownerBounds, string title, string[][] rows) {
+        using (DiagHelpForm f = new DiagHelpForm(title, rows)) {
+            Rectangle a = ownerBounds.Width > 0 ? ownerBounds : Screen.FromPoint(Cursor.Position).WorkingArea;
+            f.Location = new Point(a.X + (a.Width - f.Width) / 2, a.Y + Math.Max(0, (a.Height - f.Height) / 2));
+            if (owner != null) f.ShowDialog(owner); else f.ShowDialog();
+        }
+    }
+}
+
+// Заставка на время запуска (проверка обновлений, сбор сведений), в своём потоке
+public static class DiagSplash {
+    static DcSplash form;
+    static readonly object lk = new object();
+    static string text = "";
+    public static void Show(string t) {
+        lock (lk) { text = t ?? ""; if (form != null) return; }
+        System.Threading.ManualResetEvent ev = new System.Threading.ManualResetEvent(false);
+        System.Threading.Thread th = new System.Threading.Thread(new System.Threading.ThreadStart(delegate() {
+            try {
+                DcSplash f = new DcSplash();
+                lock (lk) form = f;
+                f.Shown += delegate { ev.Set(); };
+                Application.Run(f);
+            } catch (Exception) {
+            } finally { lock (lk) form = null; ev.Set(); }
+        }));
+        th.SetApartmentState(System.Threading.ApartmentState.STA);
+        th.IsBackground = true;
+        th.Start();
+        ev.WaitOne(3000);
+    }
+    public static void SetText(string t) { lock (lk) text = t ?? ""; }
+    internal static string Current { get { lock (lk) return text; } }
+    public static void Close() {
+        DcSplash f;
+        lock (lk) f = form;
+        if (f == null) return;
+        try { f.BeginInvoke(new MethodInvoker(delegate { try { f.Close(); } catch (Exception) { } })); } catch (Exception) { }
+    }
+}
+
+internal class DcSplash : Form {
+    readonly float k;
+    readonly Font fT, fS, fB;
+    readonly Timer tm;
+    int phase;
+    int S(double v) { return (int)Math.Round(v * k); }
+    public DcSplash() {
+        k = 1f;
+        try { using (Graphics g0 = CreateGraphics()) k = Math.Max(1f, g0.DpiX / 96f); } catch (Exception) { }
+        AutoScaleMode = AutoScaleMode.None;
+        FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.CenterScreen;
+        ShowInTaskbar = true; TopMost = true; DoubleBuffered = true; BackColor = DiagTheme.Panel;
+        Text = DiagTheme.AppName;
+        if (DiagChooser.AppIcon != null) Icon = DiagChooser.AppIcon;
+        fT = DiagTheme.Head(17f); fS = DiagTheme.Body(9f); fB = DiagTheme.Body(9.5f);
+        ClientSize = new Size(S(460), S(176));
+        tm = new Timer(); tm.Interval = 40;
+        tm.Tick += delegate { phase++; Invalidate(); };
+        tm.Start();
+    }
+    protected override CreateParams CreateParams { get { CreateParams cp = base.CreateParams; cp.ClassStyle |= 0x20000; return cp; } }
+    protected override void OnFormClosed(FormClosedEventArgs e) { tm.Stop(); base.OnFormClosed(e); }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(DiagTheme.Panel);
+        DiagGlyph.Logo(g, new RectangleF(S(30), S(32), S(60), S(60)));
+        DiagTheme.Text(g, DiagTheme.AppName, fT, new Rectangle(S(108), S(34), Width - S(130), S(34)), DiagTheme.Ink);
+        string tag = DiagTheme.AppTagline;
+        if (tag.Length > 0) tag = char.ToUpper(tag[0]) + tag.Substring(1);
+        DiagTheme.Text(g, tag, fS, new Rectangle(S(108), S(68), Width - S(130), S(22)), DiagTheme.Ink3);
+        DiagTheme.Text(g, DiagSplash.Current, fB, new Rectangle(S(30), S(118), Width - S(60), S(24)), DiagTheme.Ink2);
+        Rectangle tr = new Rectangle(S(30), S(150), Width - S(60), S(4));
+        DiagTheme.Fill(g, tr, S(2), DiagTheme.Soft);
+        int segW = tr.Width / 4;
+        int pos = (int)((phase * S(6)) % (tr.Width + segW)) - segW;
+        Rectangle seg = Rectangle.Intersect(tr, new Rectangle(tr.X + pos, tr.Y, segW, tr.Height));
+        if (seg.Width > 0) DiagTheme.Fill(g, seg, S(2), DiagTheme.Accent);
+        DiagTheme.Stroke(g, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 0f, DiagTheme.LineHi, 1f);
+    }
+}
+
+// Сохранение размеров и положения окон: HKCU\Software\BigTechoTest\Windows
+public static class DiagWinCfg {
+    const string Key = "Software\\BigTechoTest\\Windows";
+    public static string Get(string name, string def) {
+        try {
+            using (Microsoft.Win32.RegistryKey rk = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(Key)) {
+                if (rk == null) return def;
+                object v = rk.GetValue(name);
+                return v == null ? def : Convert.ToString(v, CultureInfo.InvariantCulture);
+            }
+        } catch (Exception) { return def; }
+    }
+    public static void Set(string name, string val) {
+        try { using (Microsoft.Win32.RegistryKey rk = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(Key)) { if (rk != null) rk.SetValue(name, val ?? ""); } } catch (Exception) { }
+    }
+    public static float GetF(string name, float def, float min, float max) {
+        float v;
+        if (!float.TryParse(Get(name, ""), NumberStyles.Float, CultureInfo.InvariantCulture, out v)) return def;
+        return Math.Max(min, Math.Min(max, v));
+    }
+    public static void SetF(string name, float v) { Set(name, v.ToString("0.##", CultureInfo.InvariantCulture)); }
+    // прямоугольник «x,y,w,h», только если заметная часть видна на одном из экранов
+    public static bool GetRect(string name, Size min, out Rectangle r) {
+        r = Rectangle.Empty;
+        string[] p = Get(name, "").Split(',');
+        if (p.Length != 4) return false;
+        int x, y, w, h;
+        if (!int.TryParse(p[0], out x) || !int.TryParse(p[1], out y) || !int.TryParse(p[2], out w) || !int.TryParse(p[3], out h)) return false;
+        if (w < min.Width || h < min.Height || w > 20000 || h > 20000) return false;
+        r = new Rectangle(x, y, w, h);
+        foreach (Screen s in Screen.AllScreens) {
+            Rectangle i = Rectangle.Intersect(s.WorkingArea, new Rectangle(x, y, w, 60));
+            if (i.Width >= 160 && i.Height >= 30) {
+                Rectangle wa = s.WorkingArea;
+                if (r.Width > wa.Width) r.Width = wa.Width;
+                if (r.Height > wa.Height) r.Height = wa.Height;
+                return true;
+            }
+        }
+        return false;
+    }
+    public static void SetRect(string name, Rectangle r) {
+        Set(name, string.Format(CultureInfo.InvariantCulture, "{0},{1},{2},{3}", r.X, r.Y, r.Width, r.Height));
     }
 }

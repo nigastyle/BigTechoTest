@@ -4,7 +4,7 @@
 $TOOLS.PresentMon = @{ Url = 'https://github.com/GameTechDev/PresentMon/releases/download/v2.6.0/PresentMon-2.6.0-x64.exe'; Sha = 'B2A706BC6AD475749E3B7E3409263AA1E6906D45BDCF993F6DBC0F660188F1AF'; Dir = ''; Exe = 'PresentMon-2.6.0-x64.exe' }
 $STEPKEYS['Видеокарта: фризы и статтеры (frametime)'] = 'frametime'
 $G.PresetHooks.Add({ param($full) $G.Sel.frametime = $full })
-$G.GuardStress = @($G.GuardStress) + @('frametime')
+$G.GuardStress = (AsArr $G.GuardStress) + @('frametime')
 function Get-FtPct($sorted, [double]$pct) {
     # перцентиль по УЖЕ отсортированному по возрастанию массиву
     if (-not $sorted.Count) { return $null }

@@ -61,7 +61,7 @@ Step 'Накопители: полный SMART (smartctl)' {
         # ---- ATA / SATA
         if ($isAta) {
             $arows = @(); $nowA = @(); $pastA = @()
-            foreach ($a in @($j.ata_smart_attributes.table)) {
+            foreach ($a in (AsArr $j.ata_smart_attributes.table)) {
                 if (-not $a) { continue }
                 $wf = "$($a.when_failed)"
                 if ($wf -eq 'now') { $nowA += ('{0} ({1})' -f $a.name, $a.id) } elseif ($wf -eq 'past') { $pastA += ('{0} ({1})' -f $a.name, $a.id) }

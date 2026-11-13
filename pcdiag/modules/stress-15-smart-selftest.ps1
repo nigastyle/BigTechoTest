@@ -10,8 +10,8 @@ Step 'Накопители: самотест SMART (smartctl)' {
     function LogSig($t) {
         # «отпечаток» журнала самотестов — чтобы понять, появилась ли новая запись
         if (-not $t) { return '' }
-        if ($t.Kind -eq 'ATA') { $l = $t.LogJ.ata_smart_self_test_log.standard; $e = @($l.table)[0]; return ('{0}|{1}|{2}|{3}' -f $l.count, $e.lifetime_hours, $e.status.value, $e.type.value) }
-        $l = $t.LogJ.nvme_self_test_log; $e = @($l.table)[0]; return ('{0}|{1}|{2}|{3}' -f @($l.table).Count, $e.power_on_hours, $e.self_test_result.value, $e.self_test_code.value)
+        if ($t.Kind -eq 'ATA') { $l = $t.LogJ.ata_smart_self_test_log.standard; $e = (AsArr $l.table)[0]; return ('{0}|{1}|{2}|{3}' -f $l.count, $e.lifetime_hours, $e.status.value, $e.type.value) }
+        $l = $t.LogJ.nvme_self_test_log; $e = (AsArr $l.table)[0]; return ('{0}|{1}|{2}|{3}' -f (AsArr $l.table).Count, $e.power_on_hours, $e.self_test_result.value, $e.self_test_code.value)
     }
     function Short($x) { if ($x.Length -gt 22) { return $x.Substring(0, 21) + '…' }; return $x }
     $tests = New-Object System.Collections.Generic.List[object]
@@ -107,8 +107,8 @@ Step 'Накопители: самотест SMART (smartctl)' {
         } else {
             $lj = Invoke-Smartctl (@('-l', 'selftest', '-j') + (Get-SmartctlDevArgs $t.Dev))
             $e = $null
-            if ($t.Kind -eq 'ATA') { if ($lj) { $e = @($lj.ata_smart_self_test_log.standard.table)[0] } }
-            else { if ($lj) { $e = @($lj.nvme_self_test_log.table)[0] } }
+            if ($t.Kind -eq 'ATA') { if ($lj) { $e = (AsArr $lj.ata_smart_self_test_log.standard.table)[0] } }
+            else { if ($lj) { $e = (AsArr $lj.nvme_self_test_log.table)[0] } }
             $newSig = LogSig ([pscustomobject]@{ Kind = $t.Kind; LogJ = $lj })
             if (-not $e -or (-not $t.Seen -and $newSig -eq $t.Sig)) {
                 $res = 'результат не появился в журнале диска'; $st = ''

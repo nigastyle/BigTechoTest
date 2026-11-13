@@ -761,7 +761,7 @@ function Stop-HWiNFO {
     # После последнего стресс-теста: снимок всех датчиков и закрытие HWiNFO (только если запускали мы)
     if (-not ('DiagHwi' -as [type])) { return }
     try {
-        if ($G.HwiOk) { $snap = Hwi-Snapshot; if ($snap -and @($snap).Count) { $G.HwiLast = @($snap) } }
+        if ($G.HwiOk) { $snap = Hwi-Snapshot; if ($snap -and (AsArr $snap).Count) { $G.HwiLast = (AsArr $snap) } }
         [DiagHwi]::Disarm()
         $owned = [DiagHwi]::Owned
         [DiagHwi]::Shutdown()
@@ -830,7 +830,7 @@ function Hwi-Report($S) {
         }
         $sheet = $null
         if ($G.HwiOk) { $sheet = @(Hwi-Snapshot) }
-        if (-not $sheet -or -not $sheet.Count) { $sheet = @($G.HwiLast) }
+        if (-not $sheet -or -not $sheet.Count) { $sheet = (AsArr $G.HwiLast) }
         if ($sheet -and $sheet.Count) { Add-Table $S 'HWiNFO: все датчики (мин/макс/сред с момента запуска HWiNFO)' $sheet -Collapsed }
     } catch { $G.Log.Add('hwinfo report: ' + $_.Exception.Message + ' @ ' + $_.InvocationInfo.PositionMessage) }
 }

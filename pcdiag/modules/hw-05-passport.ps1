@@ -414,7 +414,7 @@ public static class PcDiagHw {
                 if ($bt) { $txt2 = (@($txt2, (Pp-TimTxt $bt)) | Where-Object { $_ }) -join ' — '; if ($bt.F * 2 -gt $xmpMax) { $xmpMax = $bt.F * 2 } }
                 if ($txt2) { $d[('Профиль ' + $kind)] = $txt2 }
             }
-            if (-not @($sp.Prof).Count -and -not @($sp.Tim | Where-Object { $_.Kind -ne 'JEDEC' }).Count) { $d['Профили XMP/EXPO'] = 'нет' }
+            if (-not (AsArr $sp.Prof).Count -and -not @($sp.Tim | Where-Object { $_.Kind -ne 'JEDEC' }).Count) { $d['Профили XMP/EXPO'] = 'нет' }
         }
         if ($m.Speed -gt $ratedMax) { $ratedMax = [int]$m.Speed }
         if ($m.ConfiguredClockSpeed -and ($confMin -eq 0 -or $m.ConfiguredClockSpeed -lt $confMin)) { $confMin = [int]$m.ConfiguredClockSpeed }
@@ -500,7 +500,7 @@ public static class PcDiagHw {
     $sku = Clean $csys.SystemSKUNumber; if (-not (Pp-Bad $sku) -and $sku -ne 'SKU') { Pp-Add $mb 'SKU (точная комплектация)' $sku }
     $fam2 = Clean $csys.SystemFamily; if (-not (Pp-Bad $fam2)) { Pp-Add $mb 'Семейство' $fam2 }
     Pp-Add $mb 'BIOS: производитель' (Clean $bios.Manufacturer)
-    Pp-Add $mb 'BIOS: версия' ((@((Clean $bios.SMBIOSBIOSVersion), $(if ($bios.BIOSVersion) { '(' + ((@($bios.BIOSVersion) | ForEach-Object { (Clean $_) } | Where-Object { $_ }) -join '; ') + ')' } else { '' })) | Where-Object { $_ }) -join ' ')
+    Pp-Add $mb 'BIOS: версия' ((@((Clean $bios.SMBIOSBIOSVersion), $(if ($bios.BIOSVersion) { '(' + (((AsArr $bios.BIOSVersion) | ForEach-Object { (Clean $_) } | Where-Object { $_ }) -join '; ') + ')' } else { '' })) | Where-Object { $_ }) -join ' ')
     Pp-Add $mb 'BIOS: дата' (DT $bios.ReleaseDate)
     if ($null -ne $bios.SystemBiosMajorVersion -and $bios.SystemBiosMajorVersion -ne 255) { Pp-Add $mb 'BIOS: ревизия ядра' ('{0}.{1}' -f $bios.SystemBiosMajorVersion, $bios.SystemBiosMinorVersion) }
     if ($null -ne $bios.EmbeddedControllerMajorVersion -and $bios.EmbeddedControllerMajorVersion -ne 255) { Pp-Add $mb 'Прошивка EC (контроллер питания/клавиатуры)' ('{0}.{1}' -f $bios.EmbeddedControllerMajorVersion, $bios.EmbeddedControllerMinorVersion) }
@@ -649,7 +649,7 @@ public static class PcDiagHw {
         $lm = $listed | Where-Object { $_.InstanceName -eq $inst } | Select-Object -First 1
         $edidMax = 0
         if ($lm -and $lm.MonitorSourceModes) {
-            $modes = @($lm.MonitorSourceModes)
+            $modes = (AsArr $lm.MonitorSourceModes)
             $pi = [int]$lm.PreferredMonitorSourceModeIndex
             if ($pi -ge 0 -and $pi -lt $modes.Count) { $d['Родное разрешение (EDID)'] = '{0}×{1}' -f $modes[$pi].HorizontalActivePixels, $modes[$pi].VerticalActivePixels }
             foreach ($md in $modes) { if ($md.VerticalRefreshRateDenominator -gt 0) { $hz = [double]$md.VerticalRefreshRateNumerator / $md.VerticalRefreshRateDenominator; if ($hz -gt $edidMax) { $edidMax = $hz } } }

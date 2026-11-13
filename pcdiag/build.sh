@@ -7,6 +7,10 @@ d=sys.argv[1]
 body=open(os.path.join(d,'body.ps1'),encoding='utf-8').read()
 body=body.replace('%%CORE_CS%%',open(os.path.join(d,'core.cs'),encoding='utf-8').read().rstrip('\n'))
 body=body.replace('%%UI_CS%%',open(os.path.join(d,'ui.cs'),encoding='utf-8').read().rstrip('\n'))
+# канал сборки: BTT_CHANNEL=test — предрелизная (не обновляется сама)
+ch=os.environ.get('BTT_CHANNEL','stable')
+assert body.count("$CHANNEL = 'stable'")==1
+if ch!='stable': body=body.replace("$CHANNEL = 'stable'","$CHANNEL = '%s'"%ch)
 # модули: строка '#%%MOD:имя%%' заменяется содержимым modules/имя-*.ps1 (по алфавиту)
 import glob,re
 def mod(m):

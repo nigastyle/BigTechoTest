@@ -27,7 +27,7 @@ Step 'Типовые неисправности этой модели' {
     $mine = @{}
     foreach ($it in (AsArr $G.Issues)) { if ($it) { $mine[(('{0}: {1}' -f $it.Area, $it.Text) -replace '\d+([.,]\d+)?', 'N')] = $true } }
     $often = New-Object System.Collections.Generic.List[object]
-    foreach ($it in @($md.issues)) {
+    foreach ($it in (AsArr $md.issues)) {
         if (-not $it) { continue }
         $key = ('{0}: {1}' -f $it.area, $it.text)
         $often.Add([pscustomobject]@{

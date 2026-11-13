@@ -48,7 +48,7 @@ function Get-DiskDanger {
         if ($e7.Count -and ($pds.Count -eq 1 -or "$($e7[0].Message)" -match ('DR' + $num + '\b|PhysicalDrive' + $num + '\b'))) { $reasons.Add("журнал Windows: события «плохой блок/предсказание отказа» за 30 дней — $($e7.Count)"); $level = 'crit' }
         if ($reasons.Count -eq 0) { continue }
         $letters = @(); if ($null -ne $num) { try { $letters = @(Get-Partition -DiskNumber $num -ErrorAction Stop | Where-Object { $_.DriveLetter } | ForEach-Object { "$($_.DriveLetter):" }) } catch {} }
-        $res.Add([pscustomobject]@{ Number = $num; Name = "$($pd.FriendlyName)"; Letters = $letters; Level = $level; Reasons = @($reasons); SizeGB = [math]::Round([double]$pd.Size / 1GB) })
+        $res.Add([pscustomobject]@{ Number = $num; Name = "$($pd.FriendlyName)"; Letters = $letters; Level = $level; Reasons = (AsArr $reasons); SizeGB = [math]::Round([double]$pd.Size / 1GB) })
     }
     return (AsArr $res)
 }
@@ -86,7 +86,7 @@ function Get-RescueItems {
             if ($files.Count) { $items.Add([pscustomobject]@{ Label = ('{0}: закладки Firefox' -f $pf.Name); Src = $ff; Kind = 'files'; Files = $files; Default = $true; Bytes = $null; Key = ($pf.Name + '\Browser\Firefox') }) }
         }
     }
-    return @($items)
+    return (AsArr $items)
 }
 
 function Get-DirBytes {
@@ -207,7 +207,7 @@ function Invoke-RescueCopy {
         $log = Join-Path $root ('robocopy_{0}.log' -f $idx)
         if ($it.Kind -eq 'dir') {
             $a = '"' + $it.Src.TrimEnd('\') + '" "' + $dst + '" /E /R:1 /W:1 /MT:8 /XJ /NP /BYTES /UNILOG:"' + $log + '"'
-            $runs = @($a)
+            $runs = (AsArr $a)
         } else {
             # только файлы закладок: каждая папка отдельным вызовом, структура профилей сохраняется
             $runs = @()
@@ -217,7 +217,7 @@ function Invoke-RescueCopy {
                 $runs += ('"' + $grp.Name + '" "' + (Join-Path $dst $sub) + '" ' + $names + ' /R:1 /W:1 /NP /BYTES /UNILOG+:"' + $log + '"')
             }
         }
-        Info ('копирую [{0}/{1}]: {2}' -f $idx, @($Items).Count, $it.Label)
+        Info ('копирую [{0}/{1}]: {2}' -f $idx, (AsArr $Items).Count, $it.Label)
         foreach ($argLine in $runs) {
             $psi = New-Object Diagnostics.ProcessStartInfo
             $psi.FileName = $rcExe; $psi.Arguments = $argLine; $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true

@@ -37,7 +37,7 @@ function Invoke-Smartctl {
     param([string[]]$Arg, [int]$TimeoutSec = 60)
     $exe = Get-Smartctl
     if (-not $exe) { return $null }
-    $line = (@($Arg) | ForEach-Object { if ("$_" -match '[\s"]') { '"' + ("$_" -replace '"', '\"') + '"' } else { "$_" } }) -join ' '
+    $line = ((AsArr $Arg) | ForEach-Object { if ("$_" -match '[\s"]') { '"' + ("$_" -replace '"', '\"') + '"' } else { "$_" } }) -join ' '
     $G.SmartctlLastRaw = ''
     $o = ''
     try {
@@ -83,7 +83,7 @@ function Get-SmartDevices([switch]$Refresh) {
     $scan = Invoke-Smartctl @('--scan-open', '-j')
     if (-not $scan) { $G.SmartDevs = $list; return $list }
     $seen = @{}; $models = @{}; $n = 0
-    foreach ($d in @($scan.devices)) {
+    foreach ($d in (AsArr $scan.devices)) {
         if (-not $d -or -not $d.name) { continue }
         $n++
         $dev = [pscustomobject]@{ Name = "$($d.name)"; Type = "$($d.type)"; Proto = "$($d.protocol)"; Model = ''; Serial = ''; Label = "$($d.name)"; J = $null; File = ''; OpenError = "$($d.open_error)" }

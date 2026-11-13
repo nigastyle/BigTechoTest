@@ -107,7 +107,7 @@ Step 'Журналы: ошибки дисков и файловой систем
             $all.Add([pscustomobject]@{ E = $e; T = $df.T })
         }
         $last = $null; if ($list.Count) { $last = ($list | Sort-Object TimeCreated -Descending | Select-Object -First 1).TimeCreated }
-        $res[$df.K] = [pscustomobject]@{ T = $df.T; Codes = ($df.Id -join ','); N = $list.Count; Disks = (@($disks.Keys) -join ', '); Last = $last }
+        $res[$df.K] = [pscustomobject]@{ T = $df.T; Codes = ($df.Id -join ','); N = $list.Count; Disks = ((AsArr $disks.Keys) -join ', '); Last = $last }
     }
     $rows = @($defs | ForEach-Object { $r = $res[$_.K]; if ($r.N) { [pscustomobject]@{ 'Событие' = $r.T; 'Код' = $r.Codes; 'Сколько' = $r.N; 'Диск' = $(if ($r.Disks) { $r.Disks } else { '—' }); 'Последний раз' = $r.Last.ToString('dd.MM.yyyy HH:mm') } } })
     $hard = $res['bad'].N + $res['pag'].N + $res['smt'].N

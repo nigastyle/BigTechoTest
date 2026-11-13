@@ -40,7 +40,7 @@ Step 'Скрытые майнеры и подозрительная автоза
     }
     $topRows = @()
     $seen = @{}
-    foreach ($x in (@($cpuTop) + @($gpuTop))) { if ($seen.ContainsKey($x.Pid)) { continue }; $seen[$x.Pid] = 1
+    foreach ($x in ((AsArr $cpuTop) + (AsArr $gpuTop))) { if ($seen.ContainsKey($x.Pid)) { continue }; $seen[$x.Pid] = 1
         $topRows += [pscustomobject]@{ 'Процесс' = $x.Name; 'PID' = $x.Pid; 'ЦП % (в среднем)' = [math]::Round($x.Cpu, 1); 'GPU % (в среднем)' = [math]::Round($x.Gpu, 1) } }
     Add-Table $s 'Самые активные процессы в простое' $topRows -Collapsed
     if ($busy.Count -eq 0) { Add-Row $s 'Фоновая нагрузка' 'процессов, постоянно грузящих ЦП (>25 %) или видеокарту (>20 %), нет' 'ok' }
@@ -75,7 +75,7 @@ Step 'Скрытые майнеры и подозрительная автоза
     $tasks = @(); try { $tasks = @(Get-ScheduledTask -ErrorAction Stop) } catch {}
     foreach ($t in $tasks) {
         if ("$($t.TaskPath)" -like '\Microsoft\*') { continue }
-        foreach ($a in @($t.Actions)) {
+        foreach ($a in (AsArr $t.Actions)) {
             $ex = "$($a.Execute)"; if (-not $ex) { continue }
             $full = ("$ex $($a.Arguments)").Trim()
             $path = Get-ExeFromCmd $full

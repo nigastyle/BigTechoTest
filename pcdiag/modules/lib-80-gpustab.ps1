@@ -4,7 +4,7 @@
 $STEPKEYS['Видеокарта: стабильность (Vulkan, долгий)'] = 'gpustab'
 $G.PresetHooks.Add({ param($full) $G.Sel.gpustab = $full; $G.Sel.gpustabmin = 20 })
 # сторож датчиков охраняет этот шаг так же, как остальные стресс-тесты
-$G.GuardStress = @($G.GuardStress) + @('gpustab')
+$G.GuardStress = (AsArr $G.GuardStress) + @('gpustab')
 function Get-GsPct($arr, [double]$pct) {
     # перцентиль (0..100) по массиву чисел; $null для пустого
     $v = @($arr | Where-Object { $null -ne $_ } | Sort-Object)

@@ -102,7 +102,7 @@ W '#DONE'
     Write-Host ''
     Start-Sleep -Seconds 1
     $pr = & $parse
-    $all = @($pr.Lines) -join "`n"
+    $all = (AsArr $pr.Lines) -join "`n"
     $rows = @($pr.Rows | Where-Object { $_.Ph -eq 'main' })
     $fails = @($pr.Rows | Where-Object { $_.Check -eq 'fail' }).Count + @([regex]::Matches($all, '(?i)Residual checks FAILED')).Count
     $dur = ((Get-Date) - $t0).TotalSeconds
@@ -143,6 +143,6 @@ W '#DONE'
     } elseif ($rows.Count) {
         Add-Row $s 'Проверка вычислений' 'ошибок нет (residual check: pass)' 'ok'
     }
-    $G.Log.Add('Linpack tail: ' + ((@($pr.Lines) | Select-Object -Last 20) -join ' / '))
+    $G.Log.Add('Linpack tail: ' + (((AsArr $pr.Lines) | Select-Object -Last 20) -join ' / '))
     Remove-Item $wr -Force -ErrorAction SilentlyContinue
 }

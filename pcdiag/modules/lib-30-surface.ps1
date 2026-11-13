@@ -244,7 +244,7 @@ function Get-SurfaceDiskSize($Number) {
 function Get-SpeedGraph($vals, [int]$Width = 60, $errIdx = @()) {
     # Компактный «график» скорости по зонам: ▁▂▃▄▅▆▇█, × — зона с ошибкой чтения
     $ch = [char[]]@(0x2581, 0x2582, 0x2583, 0x2584, 0x2585, 0x2586, 0x2587, 0x2588)
-    $v = @($vals); if (-not $v.Count) { return '' }
+    $v = (AsArr $vals); if (-not $v.Count) { return '' }
     $ok = @($v | Where-Object { -not [double]::IsNaN([double]$_) })
     $mx = if ($ok.Count) { ($ok | Measure-Object -Maximum).Maximum } else { 0 }
     $w = [math]::Min($Width, $v.Count); $sbG = New-Object System.Text.StringBuilder

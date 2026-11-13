@@ -67,7 +67,7 @@ Step 'USB-порты: проверка' {
         if ($devs.Count) { Add-Table $s ('Устройства USB и скорость подключения ({0})' -f $devs.Count) $devs }
         $slow = @($devs | Where-Object { $_.'Скорость' -match 'USB 1\.|USB 2\.0' -and $_.'Тип' -eq 'накопитель' })
         if ($slow.Count) { Add-Row $s 'Накопитель на USB 2.0' ('{0} шт. - скорость ограничена ~30-40 МБ/с' -f $slow.Count) 'warn' }
-        $G.Num.usb_devices = @($devs).Count
+        $G.Num.usb_devices = (AsArr $devs).Count
     } else {
         # запасной вариант: список без скорости
         $G.Log.Add('usb: IOCTL-перечисление недоступно, список без скоростей')

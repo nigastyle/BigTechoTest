@@ -3,9 +3,11 @@
 # =====================================================================
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$VER = '1.5'
+$VER = '1.6'
+# Канал сборки: 'stable' — выпущена на GitHub, обновляется сама; 'test' — предрелизная, не обновляется (см. test.sh / release.sh)
+$CHANNEL = 'stable'
 $APPNAME = 'BigTechoTest'
-try { $Host.UI.RawUI.WindowTitle = "$APPNAME v$VER — диагностика ПК" } catch {}
+try { $Host.UI.RawUI.WindowTitle = "$APPNAME v$VER$(if ($CHANNEL -ne 'stable') { ' ТЕСТ' }) — диагностика ПК" } catch {}
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 $IC = [Globalization.CultureInfo]::InvariantCulture
 
@@ -48,6 +50,7 @@ function Info($t) { Say "  -    $t" 'Gray' }
 
 function AskYN($q, $def = 'Y', $autoAns = $null) {
     if ($G.Auto) { $a = if ($null -ne $autoAns) { $autoAns } else { $def }; Say "$q -> $a (авто)" 'DarkGray'; return ($a -eq 'Y') }
+    if ($G.UiOk) { try { $r = [DiagDialog]::Ask('Нужен ваш ответ', [string]$q, 'Да', 'Нет', ($def -eq 'Y')); Say ("$q -> " + $(if ($r) { 'да' } else { 'нет' })) 'DarkGray'; return [bool]$r } catch {} }
     $hint = if ($def -eq 'Y') { '[Д/н]' } else { '[д/Н]' }
     while ($true) {
         $a = Read-Host "$q $hint"
@@ -56,6 +59,12 @@ function AskYN($q, $def = 'Y', $autoAns = $null) {
         if ($a -in 'Y', 'Д', 'YES', 'ДА', 'L') { return $true }
         if ($a -in 'N', 'Н', 'NO', 'НЕТ', 'T') { return $false }
     }
+}
+
+# Инструкция перед тестом с участием человека: окно (или строка в консоли без окон)
+function Show-Instr($Title, $Text) {
+    Say $Text 'White'
+    if ($G.UiOk -and -not $G.Auto) { try { [DiagDialog]::Info([string]$Title, [string]$Text) } catch {} }
 }
 
 # ---------------------------------------------------------------- данные отчёта
@@ -92,21 +101,13 @@ function Get-Compare($Body) {
         return ($txt | ConvertFrom-Json)
     } catch { return $null }
 }
-function Invoke-SelfUpdate {
-    # Проверяет на сервере новую версию, скачивает .cmd/.exe, сверяет SHA-256, подменяет файлы и перезапускается.
-    # Заголовок .cmd (строки до #>) НЕ МЕНЯТЬ: запущенный старый cmd после выхода PowerShell дочитывает файл
-    # с того же смещения и должен попасть на строку «exit /b» уже в новом файле.
-    if ($env:DIAG_NOUPDATE -or $env:DIAG_AUTO) { return }
-    Get-ChildItem $G.Root -Filter '*.old' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    # Источники обновлений: 1) GitHub (публичный репозиторий сборок), 2) запасной — наш сервер.
-    # Манифест подписан RSA-3072 закрытым ключом выпуска; без верной подписи обновление не ставится ни из какого источника.
+# SHA-256 дополнительных файлов выпуска из проверенного манифеста (ключ — как в files: 'drivers' и т.п.)
+$G.ExtSha = @{}
+# Подписанный манифест version.json: первый источник, где подпись RSA верна. @{ Info; Src } или $null.
+# Источник: @{ Name; Manifest (база URL); Files (шаблон '{0}' = версия); Token (наш сервер: заголовок X-Diag-Token, путь /version) }
+function Get-SignedManifest($Sources) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    $srcs = @(
-        @{ Name = 'GitHub'; Manifest = 'https://github.com/nigastyle/BigTechoTest-releases/releases/latest/download'; Files = 'https://github.com/nigastyle/BigTechoTest-releases/releases/download/v{0}'; Token = $false },
-        @{ Name = 'сервер'; Manifest = ($UPLOAD.Url -replace '/upload$', ''); Files = (($UPLOAD.Url -replace '/upload$', '') + '/dl'); Token = $true }
-    )
-    $info = $null; $src = $null
-    foreach ($sx in $srcs) {
+    foreach ($sx in $Sources) {
         try {
             $wc = New-Object Net.WebClient; if ($sx.Token) { $wc.Headers.Add('X-Diag-Token', $UPLOAD.Token) }
             $raw = $wc.DownloadData($sx.Manifest + $(if ($sx.Token) { '/version' } else { '/version.json' }))
@@ -114,11 +115,29 @@ function Invoke-SelfUpdate {
             $sig = [Convert]::FromBase64String(([Text.Encoding]::ASCII.GetString($wc2s.DownloadData($sx.Manifest + '/version.sig'))).Trim())
             $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider; $rsa.PersistKeyInCsp = $false
             $rsa.FromXmlString($UPDATE_PUBKEY)
-            if (-not $rsa.VerifyData($raw, 'SHA256', $sig)) { Warn ('обновление ({0}) отклонено: подпись не совпала (возможна подмена)' -f $sx.Name); continue }
-            $info = [Text.Encoding]::UTF8.GetString($raw) | ConvertFrom-Json; $src = $sx; break
+            if (-not $rsa.VerifyData($raw, 'SHA256', $sig)) { Warn ('манифест выпуска ({0}) отклонён: подпись не совпала (возможна подмена)' -f $sx.Name); continue }
+            $mi = [Text.Encoding]::UTF8.GetString($raw) | ConvertFrom-Json
+            try { if ("$($mi.version)" -eq $VER -and $mi.files) { foreach ($fp in $mi.files.PSObject.Properties) { if ($fp.Name -notin 'cmd', 'exe') { $G.ExtSha[$fp.Name] = "$($fp.Value.sha256)".ToUpper() } } } } catch {}
+            return @{ Info = $mi; Src = $sx }
         } catch { continue }
     }
-    if (-not $info) { return }
+    return $null
+}
+function Invoke-SelfUpdate {
+    # Проверяет на сервере новую версию, скачивает .cmd/.exe, сверяет SHA-256, подменяет файлы и перезапускается.
+    # Заголовок .cmd (строки до #>) НЕ МЕНЯТЬ: запущенный старый cmd после выхода PowerShell дочитывает файл
+    # с того же смещения и должен попасть на строку «exit /b» уже в новом файле.
+    if ($env:DIAG_NOUPDATE -or $env:DIAG_AUTO -or $CHANNEL -ne 'stable') { return }   # тестовая сборка не обновляется
+    Get-ChildItem $G.Root -Filter '*.old' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    # Источник обновлений — только GitHub (публичный репозиторий сборок). На нашем сервере хранятся только результаты диагностик.
+    # Манифест подписан RSA-3072 закрытым ключом выпуска; без верной подписи обновление не ставится ни из какого источника.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $srcs = @(
+        @{ Name = 'GitHub'; Manifest = 'https://github.com/nigastyle/BigTechoTest-releases/releases/latest/download'; Files = 'https://github.com/nigastyle/BigTechoTest-releases/releases/download/v{0}'; Token = $false }
+    )
+    $sm = Get-SignedManifest $srcs
+    if (-not $sm) { return }
+    $info = $sm.Info; $src = $sm.Src
     try { if ([version]$info.version -le [version]$VER) { return } } catch { return }
     Info ('доступна новая версия {0} (у вас {1}) — обновляю ({2})...' -f $info.version, $VER, $src.Name)
     $exePath = Join-Path $G.Root 'BigTechoTest.exe'; $cmdPath = Join-Path $G.Root 'BigTechoTest.cmd'
@@ -416,6 +435,20 @@ try {
     [System.Windows.Forms.Application]::EnableVisualStyles()
     $G.UiOk = $true
 } catch { Write-Host ('Ошибка загрузки окон: ' + $_.Exception.Message) -ForegroundColor Red }
+# Запуск из BigTechoTest.exe (DIAG_GUI=1): консоль скрыта, всё общение — через окна
+if ($env:DIAG_GUI -eq '1' -and -not $G.UiOk) {
+    try { [void][System.Windows.Forms.MessageBox]::Show('Не удалось загрузить окна программы. Запустите BigTechoTest.cmd из папки программы.', 'BigTechoTest') } catch {}
+    exit 1
+}
+if ($G.UiOk -and -not $G.Auto) {
+    # внезапное завершение из-за внутренней ошибки: показать окно, а не молча закрыться
+    try {
+        Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action {
+            try { $st = $global:G; if ($st -and $st.UiOk) { [DiagDialog]::Error('Ошибка программы', ("Программа неожиданно прервалась из-за внутренней ошибки.`n`nПоследние записи журнала:`n" + (@($st.Log | Select-Object -Last 12) -join "`n"))) } } catch {}
+        } | Out-Null
+    } catch {}
+    if ($env:DIAG_GUI -eq '1') { try { [DiagSplash]::Show('Запуск: проверка обновлений и сведений о компьютере…') } catch {} }
+}
 
 # =====================================================================
 #  НАЧАЛО
@@ -437,7 +470,10 @@ Invoke-SelfUpdate
 $batNow = CIM Win32_Battery
 if ($batNow.Count -gt 0 -and ($batNow | Where-Object { $_.BatteryStatus -eq 1 })) {
     Warn 'Ноутбук работает от батареи! Подключите зарядку: иначе тесты будут неточными, а прошивки не установятся.'
-    if (-not $G.Auto) { [void](Read-Host 'Подключите зарядку и нажмите Enter') }
+    if (-not $G.Auto) {
+        if ($G.UiOk) { try { [DiagSplash]::Close() } catch {}; Show-Instr 'Подключите зарядку' 'Ноутбук работает от батареи. Подключите зарядное устройство и нажмите OK — иначе тесты будут неточными, а прошивки не установятся.' }
+        else { [void](Read-Host 'Подключите зарядку и нажмите Enter') }
+    }
 }
 
 function Set-Preset([bool]$full) {
@@ -470,7 +506,17 @@ if ($G.Auto) {
     Say 'Откроется окно выбора тестов...' 'White'
     $res = 'cancel'
     try {
-        [DiagChooser]::Version = $VER
+        [DiagChooser]::Version = $VER + $(if ($CHANNEL -ne 'stable') { ' ТЕСТ' } else { '' })
+        # жалобы для режима «По жалобе»: "ключ|Название|тест=1,тест=минуты"
+        try {
+            $cxList = New-Object System.Collections.Generic.List[string]
+            foreach ($cxItem in @($G.Complaints)) {
+                $cxTests = @(); foreach ($cxKey in @($cxItem.Tests.Keys)) { $cxVal = $cxItem.Tests[$cxKey]; if ($cxVal -is [bool]) { if ($cxVal) { $cxTests += "$cxKey=1" } } else { $cxTests += ('{0}={1}' -f $cxKey, [int]$cxVal) } }
+                $cxList.Add(('{0}|{1}|{2}' -f $cxItem.Key, $cxItem.Title, ($cxTests -join ',')))
+            }
+            [DiagChooser]::Complaints = $cxList.ToArray()
+            $cxRep = Join-Path $G.Root 'reports'; New-Item -ItemType Directory -Force $cxRep -ErrorAction SilentlyContinue | Out-Null; [DiagChooser]::ReportsDir = $cxRep
+        } catch {}
         # История проверок: локальные отчёты из <папка программы>\reports (новые первыми, до 30).
         # Серверная история (с учётом pc_id) не подключена: локальной достаточно; сюда можно добавить элементы с источником 'server'.
         try {
@@ -508,6 +554,7 @@ if ($G.Auto) {
         try { $ram = (CIM Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum; if ($ram) { $mi += ('{0:N0} ГБ' -f ($ram / 1GB)) } } catch {}
         [DiagChooser]::MachineInfo = ($mi -join ' · ')
     } catch {}
+    try { [DiagSplash]::Close() } catch {}
     try { $res = [DiagChooser]::Choose(($batNow.Count -gt 0), $G.PawnWas) } catch { $res = 'error'; $G.Log.Add("chooser: $($_.Exception.Message)") }
     if ($res -eq 'cancel') { Say 'Отменено.' 'Yellow'; exit }
     if ($res -ne 'error') {
@@ -522,6 +569,11 @@ if ($G.Auto) {
         if ($G.Sel.nohwinfo) { $env:DIAG_NOHWINFO = '1' }
         if ($G.ComplaintPending) { Set-ComplaintPreset $G.ComplaintPending; $G.Mode = 'complaint' }
     }
+}
+if (-not $G.Mode -and $G.UiOk -and $env:DIAG_GUI -eq '1') {
+    # окно выбора не открылось, а консоль скрыта — быстрая проверка без вопросов
+    try { [DiagDialog]::Warning('Окно выбора тестов', 'Окно выбора тестов не открылось. Будет выполнена быстрая проверка.') } catch {}
+    $G.Mode = 'quick'; Set-Preset $false
 }
 if (-not $G.Mode) {
     # запасной консольный вариант (если окно не открылось)
@@ -548,11 +600,12 @@ $G.UpdFirmware = [bool]($G.Sel.drivers -and $G.Sel.firmware)
 $G.DrvInstall = [bool]($G.UpdDrivers -and (-not $G.Auto -or $env:DIAG_DRV -eq 'Y'))
 $G.Pawn = [bool]($G.Sel.pawn -and -not $G.PawnWas)
 $G.MemDiag = [bool]$G.Sel.memdiag
-$modeName = @{ quick = 'быстрая проверка'; full = 'полная проверка'; custom = 'выбранные тесты' }[$G.Mode]
+$modeName = @{ quick = 'быстрая проверка'; full = 'полная проверка'; custom = 'выбранные тесты'; complaint = 'по жалобе' }[$G.Mode]
 Say ('Режим: {0}' -f $modeName) 'White'
 Say ''
 if ($G.Interactive) { Say 'Первые минуты понадобится ваше участие, дальше всё пойдёт автоматически.' 'White' }
 else { Say 'Дальше всё пойдёт автоматически. Можно отойти от компьютера.' 'White' }
+try { [DiagSplash]::Close() } catch {}
 if (Get-Command Live-Start -ErrorAction SilentlyContinue) { Live-Start }
 if (Get-Command Remote-Start -ErrorAction SilentlyContinue) { Remote-Start }   # онлайн-окно: этапы, датчики, проблемы
 
@@ -1797,6 +1850,7 @@ Step 'Драйверы: установка и обновление' {
         if ($skipFw.Count) { Add-Row $s 'Пропущены обновления прошивок/BIOS' (($skipFw | ForEach-Object { $_.U.Title }) -join '; ') 'warn'; Add-Issue 'info' 'BIOS' ('доступно обновление прошивки: ' + (($skipFw | ForEach-Object { $_.U.Title }) -join '; ')) 'Установите через Центр обновления Windows (подключив зарядку).' }
         if ($todo.Count -and -not $drvInst) { Add-Issue 'info' 'Драйверы' ('Windows Update предлагает драйверов: {0}' -f $todo.Count) 'Центр обновления Windows → Дополнительные параметры → Необязательные обновления → Обновления драйверов.' }
         if ($todo.Count -and $drvInst) {
+            $G.DrvRP = $true   # точка восстановления — одна на шаг (BTT-Drivers.ps1 получает -RestorePoint, только если её ещё нет)
             try {
                 Checkpoint-Computer -Description 'Перед обновлением драйверов (BigTechoTest)' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
                 Add-Row $s 'Точка восстановления' 'создана' 'ok'
@@ -1875,32 +1929,102 @@ Step 'Драйверы: установка и обновление' {
         if ($lt -match '(?i)reboot') { $G.RebootNeeded = $true }
     }
 
-    # ---- 3. Что осталось без драйвера: ИД оборудования + прямая ссылка на поиск в каталоге Microsoft Update
+    # ---- 3. Автоустановка — отдельный скрипт BTT-Drivers.ps1 (файл выпуска, исходник pcdiag/ext/), запускается своим процессом:
+    #         устройства без драйвера -> каталог Microsoft Update (.cab + pnputil), видеокарта NVIDIA -> свежий Game Ready с nvidia.com.
+    #         Скрипт берётся из tools\ (если SHA-256 совпал с подписанным манифестом) или скачивается (GitHub)
+    #         и сверяется с files.drivers подписанного version.json. Нет скрипта/проверка не прошла — только Windows Update (выше).
+    $dsLocal = Join-Path $G.Tools 'BTT-Drivers.ps1'
+    $dsPath = $null; $dsWhy = ''; $dsUnverified = $false
+    $dsHash = { param($pth) try { return (Get-FileHash $pth -Algorithm SHA256 -ErrorAction Stop).Hash } catch { return '' } }
+    $dsUrls = @(@{ U = "https://github.com/nigastyle/BigTechoTest-releases/releases/download/v$VER/BTT-Drivers.ps1"; T = $false })
+    $dsWant = "$($G.ExtSha['drivers'])"
+    # тестовая сборка (канал test) не выпущена на GitHub — берёт скрипт драйверов из своей папки
+    if ($CHANNEL -ne 'stable') { $dsTest = Join-Path $G.Root 'BTT-Drivers.ps1'; if (Test-Path $dsTest) { $dsPath = $dsTest; $dsUnverified = $true } }
+    if (-not $dsPath -and -not ($dsWant -and (Test-Path $dsLocal) -and (& $dsHash $dsLocal) -eq $dsWant)) {
+        if (-not $dsWant) {
+            $sm = Get-SignedManifest @(
+                @{ Name = 'GitHub'; Manifest = "https://github.com/nigastyle/BigTechoTest-releases/releases/download/v$VER"; Files = 'https://github.com/nigastyle/BigTechoTest-releases/releases/download/v{0}'; Token = $false })
+            if ($sm -and $sm.Info.files.drivers) {
+                $dsWant = "$($sm.Info.files.drivers.sha256)".ToUpper()
+                $dsUrls = @(@{ U = (($sm.Src.Files -f $sm.Info.version) + '/' + $sm.Info.files.drivers.name); T = [bool]$sm.Src.Token }) + $dsUrls
+            } elseif ($sm) { $dsWhy = 'в манифесте выпуска нет скрипта драйверов' }
+            else { $dsWhy = 'манифест выпуска недоступен (нет сети?)' }
+        }
+        if ($dsWant -and (Test-Path $dsLocal) -and (& $dsHash $dsLocal) -eq $dsWant) { $dsPath = $dsLocal }
+        elseif ($dsWant) {
+            Info 'скачиваю модуль автоустановки драйверов...'
+            $dsTmp = Join-Path $G.Temp 'BTT-Drivers.ps1'
+            foreach ($du in $dsUrls) {
+                try {
+                    Remove-Item $dsTmp -Force -ErrorAction SilentlyContinue
+                    $wcd = New-Object Net.WebClient; if ($du.T) { $wcd.Headers.Add('X-Diag-Token', $UPLOAD.Token) }
+                    $wcd.DownloadFile($du.U, $dsTmp)
+                    if ((& $dsHash $dsTmp) -eq $dsWant) { try { Copy-Item $dsTmp $dsLocal -Force -ErrorAction Stop; $dsPath = $dsLocal } catch { $dsPath = $dsTmp }; break }
+                    $dsWhy = 'контрольная сумма скачанного скрипта не совпала с подписанным манифестом'; $G.Log.Add("drvauto: SHA-256 не совпал: $($du.U)")
+                } catch { if (-not $dsWhy) { $dsWhy = 'не удалось скачать скрипт драйверов' }; $G.Log.Add("drvauto: $($du.U): $($_.Exception.Message)") }
+            }
+            if ($dsPath) { $dsWhy = '' }
+        }
+        # сети нет и проверить нечем — копия в папке программы (там же, где сама программа)
+        if (-not $dsPath -and -not $dsWant -and (Test-Path $dsLocal)) { $dsPath = $dsLocal; $dsUnverified = $true; $G.Log.Add('drvauto: манифест недоступен, используется tools\BTT-Drivers.ps1 без сверки') }
+    } else { $dsPath = $dsLocal }
+    if (-not $dsPath) {
+        if (-not $dsWhy) { $dsWhy = 'скрипт драйверов недоступен' }
+        Warn ('автоустановка драйверов (каталог Microsoft, NVIDIA) пропущена: ' + $dsWhy)
+        Add-Row $s 'Автоустановка драйверов (каталог Microsoft, NVIDIA)' ('не выполнялась: ' + $dsWhy + ' — драйверы ставились только через Windows Update (выше)') 'warn'
+    } else {
+        $dsJson = Join-Path $G.Temp 'drivers_result.json'; $dsLog = Join-Path $G.Temp 'drivers_log.txt'
+        Remove-Item $dsJson, $dsLog -Force -ErrorAction SilentlyContinue
+        $dsArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Mode {1} -Nvidia -OutJson "{2}" -LogFile "{3}" -Root "{4}"' -f $dsPath, $(if ($drvInst) { 'Install' } else { 'Search' }), $dsJson, $dsLog, $G.Root.TrimEnd('\')
+        if ($drvInst -and -not $G.DrvRP) { $dsArgs += ' -RestorePoint'; $G.DrvRP = $true }
+        if ($G.UpdFirmware) { $dsArgs += ' -Firmware' }
+        Info ('автоустановка драйверов: отдельное окно «BigTechoTest — драйверы» (до 40 мин){0}...' -f $(if ($dsUnverified) { ', без сверки (нет сети)' } else { '' }))
+        $dsT0 = Get-Date; $dsSeen = 0; $dsTimeout = $false
+        try {
+            $dsProc = Start-Process (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $dsArgs -WindowStyle Minimized -PassThru
+            $null = $dsProc.Handle
+            while ($true) {
+                $dsDone = $dsProc.WaitForExit(3000)
+                # строки прогресса скрипта ('ЧЧ:ММ:СС > текст') — в основное окно
+                try {
+                    if (Test-Path $dsLog) {
+                        $dsLines = @([IO.File]::ReadAllLines($dsLog, [Text.Encoding]::UTF8))
+                        for ($k = $dsSeen; $k -lt $dsLines.Count; $k++) { if ($dsLines[$k] -match '^\d\d:\d\d:\d\d > (.*)$') { Info $Matches[1] } }
+                        $dsSeen = $dsLines.Count
+                    }
+                } catch {}
+                if ($dsDone) { break }
+                if (((Get-Date) - $dsT0).TotalMinutes -gt 40) { $dsTimeout = $true; try { $dsProc.Kill() } catch {}; break }
+            }
+        } catch { $G.Log.Add('drvauto: запуск: ' + $_.Exception.Message) }
+        $dsRes = $null
+        try { if (Test-Path $dsJson) { $dsRes = [IO.File]::ReadAllText($dsJson, [Text.Encoding]::UTF8) | ConvertFrom-Json } } catch { $G.Log.Add('drvauto: результат: ' + $_.Exception.Message) }
+        if (-not $dsRes) {
+            $dsWhy = $(if ($dsTimeout) { 'не уложилась в 40 мин и остановлена' } else { 'завершилась без результата' })
+            Warn ('автоустановка драйверов ' + $dsWhy)
+            Add-Row $s 'Автоустановка драйверов (каталог Microsoft, NVIDIA)' ($dsWhy + ' — см. журнал; драйверы из Windows Update (выше) установлены') 'warn'
+            if ($dsTimeout) { $G.RebootNeeded = $true }
+        } else {
+            foreach ($ln in @($dsRes.log)) { $G.Log.Add('drvauto: ' + $ln) }
+            if ($dsRes.restorePoint) { Add-Row $s 'Точка восстановления' $dsRes.restorePoint $(if ($dsRes.restorePoint -eq 'создана') { 'ok' } else { 'warn' }) }
+            if ($dsRes.rebootNeeded) { $G.RebootNeeded = $true }
+            $dsItems = @($dsRes.items | Where-Object { $_ })
+            $ra = @($dsItems | ForEach-Object { [pscustomobject]@{ 'Устройство' = $_.device; 'Было' = $_.was; 'Поставлено' = $_.installed; 'Источник' = $_.source; 'Результат' = $_.result } })
+            if ($ra.Count) { Add-Table $s 'Автоустановка драйверов: результат' $ra }
+            $fa = @($dsItems | Where-Object { $_.link } | ForEach-Object { [pscustomobject]@{ 'Устройство' = $_.device; 'ИД оборудования' = $_.hwid; 'Где искать' = $_.link } })
+            if ($fa.Count) {
+                Add-Table $s 'Не удалось установить автоматически — где искать вручную' $fa
+                Add-Issue 'info' 'Устройства' ('не удалось автоматически установить драйверов: {0}' -f $fa.Count) 'См. таблицу «Не удалось установить автоматически» в разделе драйверов — там ссылки на поиск.'
+            }
+            $okN = @($ra | Where-Object { $_.'Результат' -match '^установлен' }).Count
+            if ($okN) { Ok ('автоматически установлено драйверов: {0}' -f $okN) }
+        }
+    }
     if ($drvInst) { $null = pnputil /scan-devices 2>&1; Start-Sleep -Seconds 5 }
     $badNow = @(CIM Win32_PnPEntity | Where-Object { $_.ConfigManagerErrorCode -and $_.ConfigManagerErrorCode -notin 0, 22, 24, 45 })
     Add-Row $s 'Проблемных устройств: до → после' ('{0} → {1}' -f $G.BadDevBefore, $badNow.Count) $(if ($badNow.Count -eq 0) { 'ok' } else { 'warn' })
-    if ($badNow.Count) {
-        $hrows = @($badNow | Select-Object -First 25 | ForEach-Object {
-                $hw = "$(@($_.HardwareID)[0])"; if (-not $hw) { $hw = "$($_.PNPDeviceID)" }
-                $q = $hw
-                $mm = [regex]::Match($hw, '(?i)(VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}|VID_[0-9A-F]{4}&PID_[0-9A-F]{4})')
-                if ($mm.Success) { $q = $mm.Value }
-                [pscustomobject]@{ 'Устройство' = (Clean $_.Name); 'Код' = $_.ConfigManagerErrorCode; 'ИД оборудования' = $hw; 'Поиск драйвера' = ('https://www.catalog.update.microsoft.com/Search.aspx?q=' + [uri]::EscapeDataString($q)) } })
-        Add-Table $s 'Устройства без рабочего драйвера (ищите по ИД оборудования)' $hrows
-    }
     if ($G.RebootNeeded) { Add-Issue 'info' 'Драйверы' 'для завершения установки драйверов нужна перезагрузка' 'Перезагрузите компьютер.' }
-
-    # ---- 4. Самые свежие драйверы — от производителей (в Windows Update они часто старее)
-    $gpuNames = (@(CIM Win32_VideoController) | ForEach-Object { $_.Name }) -join '; '
-    $cpuMan = "$((CIM Win32_Processor | Select-Object -First 1).Manufacturer)"
-    $vrows = @()
-    if ($gpuNames -match 'NVIDIA') { $vrows += [pscustomobject]@{ 'Для чего' = 'Видеокарта NVIDIA'; 'Программа' = 'NVIDIA App'; 'Где взять' = 'https://www.nvidia.com/ru-ru/software/nvidia-app/' } }
-    if ($gpuNames -match 'AMD|Radeon') { $vrows += [pscustomobject]@{ 'Для чего' = 'Видеокарта AMD'; 'Программа' = 'AMD Software: Adrenalin Edition'; 'Где взять' = 'https://www.amd.com/ru/support/download/drivers.html' } }
-    if ($cpuMan -match 'AMD') { $vrows += [pscustomobject]@{ 'Для чего' = 'Чипсет AMD'; 'Программа' = 'AMD Chipset Drivers'; 'Где взять' = 'https://www.amd.com/ru/support/download/drivers.html' } }
-    if ($cpuMan -match 'Intel' -or $gpuNames -match 'Intel') { $vrows += [pscustomobject]@{ 'Для чего' = 'Чипсет / графика / Wi-Fi Intel'; 'Программа' = 'Intel Driver & Support Assistant'; 'Где взять' = 'https://www.intel.com/content/www/us/en/support/detect.html' } }
-    $vrows += [pscustomobject]@{ 'Для чего' = 'Материнская плата / ноутбук, BIOS'; 'Программа' = (Vendor-Tool); 'Где взять' = '' }
-    Add-Table $s 'Свежие драйверы от производителей' $vrows
-    Add-Row $s 'BIOS' ('Обновления BIOS: ' + (Vendor-Tool))
+    Add-Row $s 'BIOS' ('Обновления BIOS (автоматически не ставятся): ' + (Vendor-Tool))
 }
 
 # =====================================================================
@@ -2175,12 +2299,14 @@ if ($sumOut) { Say ('Краткий итог для владельца: {0}' -f 
 if ($G.MemDiagScheduled) { Say 'ПЕРЕЗАГРУЗИТЕ КОМПЬЮТЕР — проверка памяти пройдёт до загрузки Windows (~20–40 мин), результат программа покажет при следующем запуске. Нужна именно «Перезагрузка», не «Завершение работы».' 'Yellow' }
 if ($G.RemoteOn) { Remote-Finish ('Оценка {0}/100 · критично: {1}, внимание: {2}' -f $score, $crit, $warn) $score }
 if (-not $G.Auto) {
-    if ($G.LiveOk) { Live-Finish ('Оценка {0}/100 · критично: {1}, внимание: {2}' -f $score, $crit, $warn) $score }
-    Start-Process $(if ($sumOut) { $sumOut } else { $out })
+    # из BigTechoTest.exe: итоговая панель онлайн-окна (кнопки отчётов), браузер сам не открываем
+    $guiRun = ($env:DIAG_GUI -eq '1')
+    if ($G.LiveOk) { Live-Finish ('Оценка {0}/100 · критично: {1}, внимание: {2}' -f $score, $crit, $warn) $score; Live-SetReports $out $sumOut (Split-Path $out) }
+    if (-not ($guiRun -and $G.LiveOk)) { Start-Process $(if ($sumOut) { $sumOut } else { $out }) }
     if ($G.MemDiagScheduled) {
         # bootsequence {memdiag} срабатывает только при загрузке через загрузчик: нужна именно «Перезагрузка»
         if (AskYN 'Перезагрузить компьютер сейчас и начать проверку памяти (~20–40 мин, до загрузки Windows)?' 'N') { Restart-Computer -Force }
     }
     elseif ($G.RebootNeeded) { if (AskYN 'Для завершения установки драйверов нужна перезагрузка. Перезагрузить сейчас?' 'N') { Restart-Computer -Force } }
-    [void](Read-Host 'Нажмите Enter для выхода')
+    if ($guiRun) { Live-WaitClosed } else { [void](Read-Host 'Нажмите Enter для выхода') }
 }
