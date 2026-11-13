@@ -3,7 +3,7 @@
 # =====================================================================
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$VER = '1.4'
+$VER = '1.5'
 $APPNAME = 'BigTechoTest'
 try { $Host.UI.RawUI.WindowTitle = "$APPNAME v$VER — диагностика ПК" } catch {}
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
@@ -33,7 +33,7 @@ $G.Auto = ($env:DIAG_AUTO -eq '1')
 $G.PresetHooks = New-Object System.Collections.Generic.List[scriptblock]
 
 # ---------------------------------------------------------------- вывод
-function Say($t, $c = 'Gray') { Write-Host $t -ForegroundColor $c; $G.Log.Add(('{0:HH:mm:ss} {1}' -f (Get-Date), $t)); if ($G.LiveOk) { Live-Log $t } }
+function Say($t, $c = 'Gray') { Write-Host $t -ForegroundColor $c; $G.Log.Add(('{0:HH:mm:ss} {1}' -f (Get-Date), $t)); if ($G.LiveOk) { Live-Log $t }; if ($G.RemoteOn) { Remote-Log $t } }
 function Title($t) {
     Write-Host ''
     Write-Host ('=' * 72) -ForegroundColor DarkCyan
@@ -62,6 +62,7 @@ function AskYN($q, $def = 'Y', $autoAns = $null) {
 function Add-Issue($Sev, $Area, $Text, $Fix = '') {
     $G.Issues.Add([pscustomobject]@{ Sev = $Sev; Area = $Area; Text = $Text; Fix = $Fix })
     if ($G.LiveOk) { Live-Issue $Sev ('{0}: {1}' -f $Area, $Text) }
+    if ($G.RemoteOn) { Remote-Issue $Sev ('{0}: {1}' -f $Area, $Text) }
     $line = '{0}: {1}' -f $Area, $Text
     switch ($Sev) { 'crit' { Bad $line } 'warn' { Warn $line } default { Info $line } }
 }
@@ -97,22 +98,29 @@ function Invoke-SelfUpdate {
     # с того же смещения и должен попасть на строку «exit /b» уже в новом файле.
     if ($env:DIAG_NOUPDATE -or $env:DIAG_AUTO) { return }
     Get-ChildItem $G.Root -Filter '*.old' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    $base = $UPLOAD.Url -replace '/upload$', ''
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $wc = New-Object Net.WebClient; $wc.Headers.Add('X-Diag-Token', $UPLOAD.Token)
-        $raw = $wc.DownloadData("$base/version")
-        $wc2s = New-Object Net.WebClient; $wc2s.Headers.Add('X-Diag-Token', $UPLOAD.Token)
-        $sig = [Convert]::FromBase64String(($wc2s.DownloadString("$base/version.sig")).Trim())
-        # Манифест подписан RSA-3072 закрытым ключом, который есть только на сервере выпуска.
-        # Без верной подписи обновление не ставится — даже если сервер или канал подменены.
-        $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider; $rsa.PersistKeyInCsp = $false
-        $rsa.FromXmlString($UPDATE_PUBKEY)
-        if (-not $rsa.VerifyData($raw, 'SHA256', $sig)) { Warn 'обновление отклонено: подпись не совпала (возможна подмена)'; return }
-        $info = [Text.Encoding]::UTF8.GetString($raw) | ConvertFrom-Json
-    } catch { return }
+    # Источники обновлений: 1) GitHub (публичный репозиторий сборок), 2) запасной — наш сервер.
+    # Манифест подписан RSA-3072 закрытым ключом выпуска; без верной подписи обновление не ставится ни из какого источника.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $srcs = @(
+        @{ Name = 'GitHub'; Manifest = 'https://github.com/nigastyle/BigTechoTest-releases/releases/latest/download'; Files = 'https://github.com/nigastyle/BigTechoTest-releases/releases/download/v{0}'; Token = $false },
+        @{ Name = 'сервер'; Manifest = ($UPLOAD.Url -replace '/upload$', ''); Files = (($UPLOAD.Url -replace '/upload$', '') + '/dl'); Token = $true }
+    )
+    $info = $null; $src = $null
+    foreach ($sx in $srcs) {
+        try {
+            $wc = New-Object Net.WebClient; if ($sx.Token) { $wc.Headers.Add('X-Diag-Token', $UPLOAD.Token) }
+            $raw = $wc.DownloadData($sx.Manifest + $(if ($sx.Token) { '/version' } else { '/version.json' }))
+            $wc2s = New-Object Net.WebClient; if ($sx.Token) { $wc2s.Headers.Add('X-Diag-Token', $UPLOAD.Token) }
+            $sig = [Convert]::FromBase64String(([Text.Encoding]::ASCII.GetString($wc2s.DownloadData($sx.Manifest + '/version.sig'))).Trim())
+            $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider; $rsa.PersistKeyInCsp = $false
+            $rsa.FromXmlString($UPDATE_PUBKEY)
+            if (-not $rsa.VerifyData($raw, 'SHA256', $sig)) { Warn ('обновление ({0}) отклонено: подпись не совпала (возможна подмена)' -f $sx.Name); continue }
+            $info = [Text.Encoding]::UTF8.GetString($raw) | ConvertFrom-Json; $src = $sx; break
+        } catch { continue }
+    }
+    if (-not $info) { return }
     try { if ([version]$info.version -le [version]$VER) { return } } catch { return }
-    Info ('доступна новая версия {0} (у вас {1}) — обновляю...' -f $info.version, $VER)
+    Info ('доступна новая версия {0} (у вас {1}) — обновляю ({2})...' -f $info.version, $VER, $src.Name)
     $exePath = Join-Path $G.Root 'BigTechoTest.exe'; $cmdPath = Join-Path $G.Root 'BigTechoTest.cmd'
     $fromExe = [bool]$env:DIAG_ROOT -and ($G.Self -ne $cmdPath)
     $want = @()
@@ -121,8 +129,8 @@ function Invoke-SelfUpdate {
     try {
         foreach ($w in $want) {
             $f = $info.files.($w.Key); if (-not $f) { throw "нет файла $($w.Key) на сервере" }
-            $wc2 = New-Object Net.WebClient; $wc2.Headers.Add('X-Diag-Token', $UPLOAD.Token)
-            $wc2.DownloadFile("$base/dl/$($f.name)", $w.Path + '.new')
+            $wc2 = New-Object Net.WebClient; if ($src.Token) { $wc2.Headers.Add('X-Diag-Token', $UPLOAD.Token) }
+            $wc2.DownloadFile((($src.Files -f $info.version) + '/' + $f.name), $w.Path + '.new')
             $h = (Get-FileHash ($w.Path + '.new') -Algorithm SHA256).Hash
             if ($h -ne "$($f.sha256)".ToUpper()) { throw "контрольная сумма $($f.name) не совпала" }
         }
@@ -172,6 +180,7 @@ $STEPKEYS = @{ 'Установленные программы' = 'programs'; 'Ж
     'Накопитель: тест скорости (DiskSpd)' = 'disk'; 'Видеокарта: бенчмарк и стресс-тест (FurMark)' = 'gpu'
     'Оценка WinSAT и целостность Windows' = 'sys'; 'Драйверы: установка и обновление' = 'drivers'; 'Проверка на вирусы (Microsoft Defender)' = 'av'; 'Процессор и память: y-cruncher' = 'ycr' }
 # ТемпературныйНюхач сработал → текущий тест обрывается (функция из modules/lib-07-guard.ps1)
+function Stop-Text { if (('DiagLive' -as [type]) -and [DiagLive]::StopRequested) { return 'тест остановлен пользователем (кнопка «Остановить тесты»)' }; return 'тест остановлен: ТемпературныйНюхач обнаружил аномалию' }
 function Stop-Requested {
     if (('DiagLive' -as [type]) -and [DiagLive]::StopRequested) { return $true }   # кнопка «Остановить тесты» в онлайн-окне
     if (Get-Command Guard-Tripped -ErrorAction SilentlyContinue) { return [bool](Guard-Tripped) }; return $false
@@ -202,6 +211,7 @@ function Step($Name, [scriptblock]$Body) {
     Title $Name
     $liveN0 = $G.Issues.Count; $liveErr = $false
     if ($G.LiveOk) { Live-Step $Name }
+    if ($G.RemoteOn) { Remote-Step $Name }
     if ((Get-Command Guard-Before -ErrorAction SilentlyContinue) -and -not (Guard-Before $Name)) { if ($G.LiveOk) { Live-StepEnd $Name 'skip' }; return }   # ТемпературныйНюхач
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $bbOn = $G.BBStress -and $STEPKEYS.ContainsKey($Name) -and ($G.BBStress -contains $STEPKEYS[$Name]) -and (Get-Command BB-Start -ErrorAction SilentlyContinue)
@@ -213,6 +223,7 @@ function Step($Name, [scriptblock]$Body) {
     }
     finally { if (Get-Command Guard-After -ErrorAction SilentlyContinue) { Guard-After $Name }; if ($bbOn) { BB-Stop } }
     if ($G.LiveOk) { Live-StepEnd $Name $(if ($liveErr) { 'error' } else { Live-StateSince $liveN0 }) }
+    if ($G.RemoteOn) { Remote-StepEnd $Name $(if ($liveErr) { 'error' } else { 'ok' }) }
     Say ('  (заняло {0:N0} с)' -f $sw.Elapsed.TotalSeconds) 'DarkGray'
 }
 
@@ -224,6 +235,8 @@ function CIM($Class, $Ns = 'root/cimv2', $Filter = $null) {
         return @(Get-CimInstance @p)
     } catch { return @() }
 }
+# @(список) над типизированным List[...] в PS 5.1 иногда падает «Argument types do not match» — копируем поэлементно
+function AsArr($x) { $o = New-Object System.Collections.ArrayList; if ($null -ne $x) { foreach ($i in $x) { [void]$o.Add($i) } }; return ,$o.ToArray() }
 function Clean($s) { if ($null -eq $s) { return '' }; return (("$s" -replace '\s+', ' ').Trim()) }
 function GB($b, $d = 1) { if (-not $b) { return '—' }; return ("{0:N$d} ГБ" -f ($b / 1GB)) }
 function DT($d) { if ($d -is [datetime]) { if ($d.Year -lt 1990) { return '—' }; return $d.ToString('dd.MM.yyyy') }; return "$d" }
@@ -380,10 +393,13 @@ function Read-Key {
     }
     if ($G.BB) { BB-Sample $r }
     if ($G.LiveOk) { Live-Sensors $r }
+    if ($G.RemoteOn) { Remote-Sensors $r }
     return $r
 }
 
 #%%MOD:lib%%
+# служебные инструменты (флешка MemTest86, спасательная флешка WinPE): BigTechoTest.cmd с DIAG_TOOL=memtest86usb|rescueusb
+if ($env:DIAG_TOOL -and (Get-Command Invoke-DiagTool -ErrorAction SilentlyContinue)) { Invoke-DiagTool $env:DIAG_TOOL; exit }
 
 # ---------------------------------------------------------------- C#-модули
 $csCore = @'
@@ -428,6 +444,7 @@ function Set-Preset([bool]$full) {
     $G.Sel = @{}
     foreach ($k in 'info', 'programs', 'logs', 'net', 'kbd', 'screen', 'sound', 'mic', 'cam', 'cpu', 'prime', 'ycr', 'gpu', 'ram', 'disk', 'av', 'drivers', 'pawn') { $G.Sel[$k] = $true }
     $G.Sel.sys = $full; $G.Sel.firmware = $false; $G.Sel.memdiag = $false
+    $G.Sel.sdio = $false   # Snappy Driver Installer — только по желанию (качает драйверпаки по несколько ГБ торрентом)
     $G.Sel.cpusec = $(if ($full) { 300 } else { 90 }); $G.Sel.gpusec = $(if ($full) { 300 } else { 60 }); $G.Sel.primemin = $(if ($full) { 10 } else { 3 }); $G.Sel.ycrmin = $(if ($full) { 10 } else { 2 }); $G.Sel.ramfull = $full
     foreach ($h in @($G.PresetHooks)) { if ($h) { & $h $full } }   # модули добавляют свои ключи
 }
@@ -443,7 +460,9 @@ if ($G.Auto) {
         $G.Mode = 'custom'
     } else { $G.Mode = $(if ($env:DIAG_MODE -eq '2') { 'full' } else { 'quick' }); Set-Preset ($G.Mode -eq 'full') }
     if ($env:DIAG_GPU) { $G.Sel.gpu = $env:DIAG_GPU -eq 'Y' }
+    # DIAG_DRV: N — шаг драйверов пропускается; Y — поиск И установка; не задан — только поиск и список (см. $G.DrvInstall)
     if ($env:DIAG_DRV) { $G.Sel.drivers = $env:DIAG_DRV -eq 'Y' }
+    if ($env:DIAG_SDIO) { $G.Sel.sdio = $env:DIAG_SDIO -eq 'Y' }
     $G.Sel.pawn = $env:DIAG_PAWN -eq 'Y'
     if ($env:DIAG_COMPLAINT -and (Get-Command Set-ComplaintPreset -ErrorAction SilentlyContinue)) { Set-ComplaintPreset ($env:DIAG_COMPLAINT -split '[,; ]+'); $G.Mode = 'complaint' }
     foreach ($k in 'kbd', 'screen', 'sound', 'mic', 'cam') { $G.Sel[$k] = $false }
@@ -520,10 +539,13 @@ if (-not $G.Mode) {
     if ($G.Mode -eq 'full') { $G.Sel.memdiag = AskYN 'Запланировать полную проверку памяти при следующей перезагрузке?' 'N' }
 }
 $G.Full = ($G.Mode -eq 'full')
-$G.Interactive = [bool]($G.Sel.kbd -or $G.Sel.screen -or $G.Sel.sound -or $G.Sel.mic -or $G.Sel.cam)
+$G.Interactive = [bool]($G.Sel.kbd -or $G.Sel.screen -or $G.Sel.sound -or $G.Sel.mic -or $G.Sel.cam -or $G.Sel.audioloop -or $G.Sel.screenfull -or $G.Sel.periph)
+if ($G.Auto) { $G.Interactive = $false }
 $G.GpuStress = [bool]$G.Sel.gpu
 $G.UpdDrivers = [bool]$G.Sel.drivers
 $G.UpdFirmware = [bool]($G.Sel.drivers -and $G.Sel.firmware)
+# установка драйверов: при ручном запуске — по выбору пользователя; в авто-режиме — только при DIAG_DRV=Y (иначе только поиск и список)
+$G.DrvInstall = [bool]($G.UpdDrivers -and (-not $G.Auto -or $env:DIAG_DRV -eq 'Y'))
 $G.Pawn = [bool]($G.Sel.pawn -and -not $G.PawnWas)
 $G.MemDiag = [bool]$G.Sel.memdiag
 $modeName = @{ quick = 'быстрая проверка'; full = 'полная проверка'; custom = 'выбранные тесты' }[$G.Mode]
@@ -531,7 +553,8 @@ Say ('Режим: {0}' -f $modeName) 'White'
 Say ''
 if ($G.Interactive) { Say 'Первые минуты понадобится ваше участие, дальше всё пойдёт автоматически.' 'White' }
 else { Say 'Дальше всё пойдёт автоматически. Можно отойти от компьютера.' 'White' }
-if (Get-Command Live-Start -ErrorAction SilentlyContinue) { Live-Start }   # онлайн-окно: этапы, датчики, проблемы
+if (Get-Command Live-Start -ErrorAction SilentlyContinue) { Live-Start }
+if (Get-Command Remote-Start -ErrorAction SilentlyContinue) { Remote-Start }   # онлайн-окно: этапы, датчики, проблемы
 
 # =====================================================================
 Step 'Подготовка инструментов' {
@@ -540,7 +563,7 @@ Step 'Подготовка инструментов' {
     if ($G.Sel.disk) { [void](Get-Tool 'DiskSpd') }
     if ($G.GpuStress) { [void](Get-Tool 'FurMark') }
     if ($G.Sel.prime) { [void](Get-Tool 'Prime95') }
-    if ($G.UpdDrivers) { [void](Get-Tool 'SDIO') }
+    if ($G.DrvInstall -and $G.Sel.sdio) { [void](Get-Tool 'SDIO') }
     if ($G.Pawn) {
         $pi = Get-Tool 'PawnIO'
         if ($pi) {
@@ -966,7 +989,7 @@ Step 'Устройства и драйверы' {
         $nm = if ($d.Name) { Clean $d.Name } else { 'Неизвестное устройство' }
         $brows += [pscustomobject]@{ 'Устройство' = $nm; 'Класс' = $d.PNPClass; 'Проблема' = ('код {0}: {1}' -f $c, $codes[$c]); 'ID' = $d.DeviceID }
         if ($c -eq 22) { Add-Issue 'info' 'Устройства' "$nm — отключено вручную" '' }
-        elseif ($c -eq 28 -or $c -eq 1) { Add-Issue 'warn' 'Устройства' "$nm — нет драйвера" $(if ($G.UpdDrivers) { 'Программа попробует установить драйвер на шаге обновления драйверов.' } else { 'Установите драйвер (Snappy Driver Installer или сайт производителя).' }) }
+        elseif ($c -eq 28 -or $c -eq 1) { Add-Issue 'warn' 'Устройства' "$nm — нет драйвера" $(if ($G.UpdDrivers) { 'Программа поищет драйвер в Windows Update на шаге обновления драйверов.' } else { 'Установите драйвер: Центр обновления Windows → Дополнительные обновления, или найдите по ИД оборудования на catalog.update.microsoft.com / сайте производителя.' }) }
         else { Add-Issue 'warn' 'Устройства' "$nm — $($codes[$c]) (код $c)" 'Переустановите драйвер; при коде 43 проверьте подключение/устройство.' }
     }
     Add-Row $s 'Устройств с проблемами' $G.BadDevBefore $(if ($G.BadDevBefore) { 'warn' } else { 'ok' })
@@ -1132,12 +1155,15 @@ Step 'Журналы ошибок за 30 дней' {
     if ($disk.Count) { Add-Issue 'warn' 'Накопитель' "ошибки дисковой подсистемы в журнале: $($disk.Count)" 'Проверьте кабели/разъём, обновите прошивку SSD, сделайте резервную копию.' }
     if ($ntfs.Count) { Add-Issue 'warn' 'Диск' 'обнаружены повреждения файловой системы' 'Выполните chkdsk C: /f (с перезагрузкой).' }
     if ($tdr.Count) { Add-Issue 'warn' 'Видеокарта' ('драйвер видеокарты сбоил {0} раз' -f $tdr.Count) 'Обновите драйвер видеокарты, проверьте температуру и разгон.' }
-    $mres = @(Ev 'Microsoft-Windows-MemoryDiagnostics-Results' $null $null 365 | Sort-Object TimeCreated -Descending)
+    # коды MemoryDiagnostics-Results: 1101/1201 — ошибок нет, 1102/1202 — ошибки, 1103 — отменена, 1104 — не завершена
+    $mres = @(Ev 'Microsoft-Windows-MemoryDiagnostics-Results' @(1101, 1102, 1103, 1104, 1201, 1202) $null 365 | Sort-Object TimeCreated -Descending)
     if ($mres.Count) {
         $last = $mres[0]
-        $ok = ($last.Id -eq 1201) -or ($last.Message -match 'no errors|не обнаружил|ошибок не обнаружено|не выявило')
-        Add-Row $s 'Последняя проверка памяти Windows' ('{0}: {1}' -f (DT $last.TimeCreated), $(if ($ok) { 'ошибок нет' } else { 'НАЙДЕНЫ ОШИБКИ' })) $(if ($ok) { 'ok' } else { 'crit' })
-        if (-not $ok) { Add-Issue 'crit' 'Память' 'Windows Memory Diagnostic нашёл ошибки оперативной памяти' 'Проверьте планки по одной (MemTest86), замените сбойную.' }
+        $mdTxt = switch ($last.Id) { { $_ -in 1101, 1201 } { 'ошибок нет' } { $_ -in 1102, 1202 } { 'НАЙДЕНЫ ОШИБКИ' } 1103 { 'отменена' } default { 'не завершилась' } }
+        $ok = $last.Id -in 1101, 1201
+        Add-Row $s 'Последняя проверка памяти Windows' ('{0}: {1}' -f (DT $last.TimeCreated), $mdTxt) $(if ($ok) { 'ok' } elseif ($last.Id -in 1102, 1202) { 'crit' } else { 'warn' })
+        # свежий результат после планирования уже выдан шагом 'Результат проверки памяти Windows' — не дублируем
+        if ($last.Id -in 1102, 1202 -and -not $G.MemDiagReported) { Add-Issue 'crit' 'Память' 'Windows Memory Diagnostic нашёл ошибки оперативной памяти' 'Проверьте планки по одной (MemTest86), замените сбойную.' }
     }
     $all = @($bsod) + @($kp) + @($wheaE) + @($disk) + @($tdr)
     $crow = @($all | Sort-Object TimeCreated -Descending | Select-Object -First 25 | ForEach-Object {
@@ -1328,7 +1354,7 @@ Step 'Процессор: бенчмарки и стресс-тест' {
         Start-Sleep -Seconds 3
         if (-not [DiagCore]::IsRunning) { break }
         $k = Read-Key
-        if (Stop-Requested) { Write-Host ''; Warn 'тест остановлен: ТемпературныйНюхач обнаружил аномалию'; break }
+        if (Stop-Requested) { Write-Host ''; Warn (Stop-Text); break }
         $eff = $null
         $perf = CIM Win32_PerfFormattedData_Counters_ProcessorInformation 'root/cimv2' "Name='_Total'" | Select-Object -First 1
         if ($perf -and $perf.ProcessorFrequency) { $eff = [double]$perf.ProcessorFrequency * [double]$perf.PercentProcessorPerformance / 100 }
@@ -1388,7 +1414,7 @@ Step 'Процессор: бенчмарки и стресс-тест' {
             while (((Get-Date) - $t0).TotalMinutes -lt $mins -and -not $pp.HasExited) {
                 Start-Sleep -Seconds 5
                 $k = Read-Key
-                if (Stop-Requested) { Write-Host ''; Warn 'тест остановлен: ТемпературныйНюхач обнаружил аномалию'; break }
+                if (Stop-Requested) { Write-Host ''; Warn (Stop-Text); break }
                 $tt = $k.CpuTemp
                 if ($null -ne $tt -and ($null -eq $pmax -or $tt -gt $pmax)) { $pmax = $tt }
                 if (((Get-Date) - $t0).TotalSeconds -gt 10) {
@@ -1463,7 +1489,7 @@ Step 'Процессор и память: y-cruncher' {
         while (-not $p.HasExited -and ((Get-Date) - $t0).TotalSeconds -lt $sec) {
             Start-Sleep -Seconds 3
             $k = Read-Key; if ($null -ne $k.CpuTemp -and ($null -eq $tmax -or $k.CpuTemp -gt $tmax)) { $tmax = $k.CpuTemp }
-            if (Stop-Requested) { Write-Host ''; Warn 'тест остановлен: ТемпературныйНюхач обнаружил аномалию'; break }
+            if (Stop-Requested) { Write-Host ''; Warn (Stop-Text); break }
             Write-Host -NoNewline ("`r    {0,4:N0} с | темп. {1} °C   " -f ((Get-Date) - $t0).TotalSeconds, $(if ($null -ne $k.CpuTemp) { '{0:N0}' -f $k.CpuTemp } else { '—' }))
             if ($null -ne $k.CpuTemp -and $k.CpuTemp -ge 100) { Warn 'температура 100 °C — тест остановлен'; break }
         }
@@ -1604,7 +1630,7 @@ Step 'Видеокарта: бенчмарк и стресс-тест (FurMark)'
     while (-not $p.HasExited -and ((Get-Date) - $t0).TotalSeconds -lt ($sec + 60)) {
         Start-Sleep -Seconds 3
         $k = Read-Key
-        if (Stop-Requested) { Write-Host ''; Warn 'тест остановлен: ТемпературныйНюхач обнаружил аномалию'; break }
+        if (Stop-Requested) { Write-Host ''; Warn (Stop-Text); break }
         foreach ($pair in @(@('T', $k.GpuTemp), @('H', $k.GpuHot), @('P', $k.GpuPower), @('L', $k.GpuLoad), @('F', $k.GpuFan), @('M', $k.GpuMemT))) { if ($null -ne $pair[1] -and ($null -eq $mx[$pair[0]] -or $pair[1] -gt $mx[$pair[0]])) { $mx[$pair[0]] = $pair[1] } }
         if ($k.GpuClock -and $k.GpuLoad -gt 80) { $cl.Add([double]$k.GpuClock) }
         Write-Host -NoNewline ("`r    {0,4:N0} с | GPU {1} °C | {2} МГц | {3} Вт | загрузка {4} %   " -f ((Get-Date) - $t0).TotalSeconds, $(if ($null -ne $k.GpuTemp) { '{0:N0}' -f $k.GpuTemp } else { '—' }), $(if ($k.GpuClock) { '{0:N0}' -f $k.GpuClock } else { '—' }), $(if ($k.GpuPower) { '{0:N0}' -f $k.GpuPower } else { '—' }), $(if ($null -ne $k.GpuLoad) { '{0:N0}' -f $k.GpuLoad } else { '—' }))
@@ -1734,93 +1760,177 @@ Step 'Оценка WinSAT и целостность Windows' {
 
 # =====================================================================
 Step 'Драйверы: установка и обновление' {
+    # Основной путь — Windows Update (каталог Microsoft: драйверы производителей, скачивание по HTTPS, надёжно).
+    # SDIO — только по явному выбору (ключ 'sdio', по умолчанию выключен): он качает ЦЕЛЫЕ драйверпаки торрентом
+    # (на тестовом ПК под 11 драйверов нужно 8 паков ≈ 4,3 ГБ) и не укладывался в лимит 25/45 мин — ничего не ставилось.
+    # $G.DrvInstall = $false (авто-режим без DIAG_DRV=Y) — только поиск и список, без установки.
     if (-not $G.UpdDrivers) { Info 'пропущено по вашему выбору'; return }
     $s = New-Section 'Установка и обновление драйверов'
-    try {
-        Checkpoint-Computer -Description 'Перед обновлением драйверов (BigTechoTest)' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
-        Add-Row $s 'Точка восстановления' 'создана' 'ok'
-    } catch { Add-Row $s 'Точка восстановления' 'не создана (защита системы выключена или точка уже создавалась сегодня)' 'warn' }
+    $drvInst = [bool]$G.DrvInstall
+    if (-not $drvInst) { Add-Row $s 'Режим' 'только поиск — драйверы не устанавливались (авто-режим; для установки DIAG_DRV=Y)' }
 
-    Info 'Windows Update: поиск драйверов...'
+    # ---- 1. Windows Update: поиск (и установка) драйверов
+    Info 'Windows Update: поиск драйверов (обычно до минуты)...'
+    $wuT0 = Get-Date
     try {
         $sess = New-Object -ComObject Microsoft.Update.Session
         $sess.ClientApplicationID = 'PC Diagnostika'
-        $res = $sess.CreateUpdateSearcher().Search("IsInstalled=0 and Type='Driver' and IsHidden=0")
+        $srch = $sess.CreateUpdateSearcher()
+        $srch.Online = $true
+        $res = $null
+        # ServerSelection 2 = напрямую Windows Update (если ПК привязан к корпоративному WSUS, драйверов там обычно нет)
+        try { $srch.ServerSelection = 2; $res = $srch.Search("IsInstalled=0 and Type='Driver' and IsHidden=0") }
+        catch { $G.Log.Add("WU ss=2: $($_.Exception.Message)"); $srch.ServerSelection = 0; $res = $srch.Search("IsInstalled=0 and Type='Driver' and IsHidden=0") }
         $list = @()
         foreach ($u in $res.Updates) { $list += [pscustomobject]@{ U = $u; Fw = (("$($u.DriverClass)" -match 'firmware') -or ($u.Title -match '(?i)firmware|bios|uefi|прошив')) } }
         $onBattery = [bool](CIM Win32_Battery | Where-Object { $_.BatteryStatus -eq 1 })
         $skipFw = @($list | Where-Object { $_.Fw -and (-not $G.UpdFirmware -or $onBattery) })
         $todo = @($list | Where-Object { -not $_.Fw -or ($G.UpdFirmware -and -not $onBattery) })
-        Add-Row $s 'Windows Update: найдено драйверов' $list.Count
+        Add-Row $s 'Windows Update: найдено драйверов' ('{0} (поиск занял {1:N0} с)' -f $list.Count, ((Get-Date) - $wuT0).TotalSeconds) $(if ($list.Count) { 'warn' } else { 'ok' })
+        Info ('Windows Update: найдено драйверов: {0}' -f $list.Count)
+        if ($list.Count) {
+            $lrows = @($list | ForEach-Object {
+                    [pscustomobject]@{ 'Драйвер' = $_.U.Title; 'Класс' = "$($_.U.DriverClass)"; 'Производитель' = "$($_.U.DriverManufacturer)"; 'Дата версии' = (DT $_.U.DriverVerDate)
+                        'Размер' = ('{0:N1} МБ' -f ($_.U.MaxDownloadSize / 1MB)); 'Действие' = $(if ($_.Fw -and ($skipFw -contains $_)) { 'пропущено (прошивка)' } elseif ($drvInst) { 'установка' } else { 'только найдено' }) } })
+            Add-Table $s 'Windows Update: доступные драйверы' $lrows
+        }
         if ($skipFw.Count) { Add-Row $s 'Пропущены обновления прошивок/BIOS' (($skipFw | ForEach-Object { $_.U.Title }) -join '; ') 'warn'; Add-Issue 'info' 'BIOS' ('доступно обновление прошивки: ' + (($skipFw | ForEach-Object { $_.U.Title }) -join '; ')) 'Установите через Центр обновления Windows (подключив зарядку).' }
-        if ($todo.Count) {
-            $coll = New-Object -ComObject Microsoft.Update.UpdateColl
-            foreach ($t in $todo) { if (-not $t.U.EulaAccepted) { try { $t.U.AcceptEula() } catch {} }; [void]$coll.Add($t.U) }
-            Info ('скачиваю и устанавливаю {0} драйвер(ов)...' -f $coll.Count)
-            $dl = $sess.CreateUpdateDownloader(); $dl.Updates = $coll; [void]$dl.Download()
-            $ins = $sess.CreateUpdateInstaller(); $ins.Updates = $coll
-            $ir = $ins.Install()
+        if ($todo.Count -and -not $drvInst) { Add-Issue 'info' 'Драйверы' ('Windows Update предлагает драйверов: {0}' -f $todo.Count) 'Центр обновления Windows → Дополнительные параметры → Необязательные обновления → Обновления драйверов.' }
+        if ($todo.Count -and $drvInst) {
+            try {
+                Checkpoint-Computer -Description 'Перед обновлением драйверов (BigTechoTest)' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+                Add-Row $s 'Точка восстановления' 'создана' 'ok'
+            } catch { Add-Row $s 'Точка восстановления' 'не создана (защита системы выключена или точка уже создавалась сегодня)' 'warn' }
             $rc = @{ 2 = 'установлен'; 3 = 'установлен с ошибками'; 4 = 'ОШИБКА'; 5 = 'прерван' }
-            $wrows = @()
-            for ($i = 0; $i -lt $coll.Count; $i++) { $wrows += [pscustomobject]@{ 'Драйвер' = $coll.Item($i).Title; 'Результат' = $rc[[int]$ir.GetUpdateResult($i).ResultCode] } }
-            Add-Table $s 'Windows Update: установленные драйверы' $wrows
-            if ($ir.RebootRequired) { $G.RebootNeeded = $true }
+            $wrows = @(); $wi = 0; $wfail = 0
+            foreach ($t in $todo) {
+                $wi++
+                $u = $t.U
+                Info ('[{0}/{1}] {2} ({3:N1} МБ)' -f $wi, $todo.Count, $u.Title, ($u.MaxDownloadSize / 1MB))
+                $one = New-Object -ComObject Microsoft.Update.UpdateColl
+                if (-not $u.EulaAccepted) { try { $u.AcceptEula() } catch {} }
+                [void]$one.Add($u)
+                $wres = 'ОШИБКА'
+                try {
+                    if (-not $u.IsDownloaded) {
+                        $dl = $sess.CreateUpdateDownloader(); $dl.Updates = $one
+                        $dr = $dl.Download()
+                        if ([int]$dr.ResultCode -notin 2, 3) { throw ('не скачался (код {0})' -f $dr.ResultCode) }
+                    }
+                    $ins = $sess.CreateUpdateInstaller(); $ins.Updates = $one
+                    $ir = $ins.Install()
+                    $wres = $rc[[int]$ir.ResultCode]
+                    if (-not $wres) { $wres = 'код ' + $ir.ResultCode }
+                    if ($ir.RebootRequired) { $G.RebootNeeded = $true }
+                } catch { $wres = 'ОШИБКА: ' + $_.Exception.Message }
+                if ($wres -notmatch '^установлен') { $wfail++ }
+                $wrows += [pscustomobject]@{ 'Драйвер' = $u.Title; 'Результат' = $wres }
+            }
+            Add-Table $s 'Windows Update: установка драйверов' $wrows
+            if ($wfail) { Add-Issue 'info' 'Драйверы' ('Windows Update не смог установить драйверов: {0}' -f $wfail) 'Повторите через Центр обновления Windows → Необязательные обновления или скачайте драйвер с сайта производителя.' }
         }
     } catch { Add-Row $s 'Windows Update' ('недоступен: ' + $_.Exception.Message) 'warn' }
 
+    # ---- 2. (необязательно) Snappy Driver Installer — только по выбору пользователя (ключ 'sdio')
     $sdio = $null
-    if (-not $G.Full -and $G.BadDevBefore -eq 0) { Add-Row $s 'Snappy Driver Installer' 'не запускался: все устройства работают, обновления взяты из Windows Update (в полном режиме SDIO обновляет и рабочие драйверы)' }
-    else { $sdio = Get-Tool 'SDIO' }
+    if ($G.Sel.sdio -and $drvInst) { $sdio = Get-Tool 'SDIO' }
+    elseif ($G.Sel.sdio) { Add-Row $s 'Snappy Driver Installer' 'не запускался: режим «только поиск»' }
     if ($sdio) {
         $lim = if ($G.Full) { 45 } else { 25 }
         $sel = if ($G.Full) { 'select missing newer' } else { 'select missing' }
-        Info ('Snappy Driver Installer: индексы и драйверпаки качаются торрентом (до {0} мин)...' -f $lim)
+        Info ('Snappy Driver Installer: драйверпаки качаются торрентом, их размер — гигабайты (лимит {0} мин)...' -f $lim)
         $sd = Split-Path $sdio
         $w = Join-Path $G.Temp 'sdio'
         New-Item -ItemType Directory -Force $w | Out-Null
-        @('verbose 384', "logdir $w\logs", 'logging on', 'enableinstall on', 'init', "writedevicelist $w\before.txt",
+        # журнал — в папку SDIO (папка $G.Temp удаляется в конце, журнал нужен для разбора); недокачанные паки в SDIO\update докачиваются при следующем запуске
+        $sdLogs = Join-Path $sd 'logs'
+        @('verbose 384', "logdir $sdLogs", 'logging on', 'enableinstall on', 'init',
             'checkupdates', 'onerror goto :local', 'get indexes', 'init',
-            ':local', $sel, 'get driverpacks selected', 'install', "writedevicelist $w\after.txt", 'end') | Set-Content (Join-Path $w 'script.txt') -Encoding ascii
-        $p = Start-Process $sdio -ArgumentList ('-script:"{0}"' -f (Join-Path $w 'script.txt')), '-nosnapshot', '-norestorepnt' -WorkingDirectory $sd -PassThru -WindowStyle Normal
+            ':local', $sel, 'install', 'end') | Set-Content (Join-Path $w 'script.txt') -Encoding ascii
         $t0 = Get-Date
+        $p = Start-Process $sdio -ArgumentList ('-script:"{0}"' -f (Join-Path $w 'script.txt')) -WorkingDirectory $sd -PassThru -WindowStyle Minimized
         while (-not $p.HasExited -and ((Get-Date) - $t0).TotalMinutes -lt $lim) {
             Start-Sleep -Seconds 10
             Write-Host -NoNewline ("`r    SDIO работает {0:N0} мин...   " -f ((Get-Date) - $t0).TotalMinutes)
         }
         Write-Host ''
         $finished = $p.HasExited
-        if (-not $finished) { try { Get-Process -Id $p.Id -ErrorAction SilentlyContinue | Stop-Process -Force } catch {}; Warn "SDIO не уложился в $lim мин (медленный торрент) — остановлен. Индексы сохранены, следующий запуск будет быстрее." }
-        $log = Get-ChildItem (Join-Path $w 'logs') -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $finished) { try { Get-Process -Id $p.Id -ErrorAction SilentlyContinue | Stop-Process -Force } catch {}; Warn "SDIO не уложился в $lim мин (драйверпаки большие) — остановлен. Скачанное сохранено, следующий запуск докачает." }
+        $log = Get-ChildItem $sdLogs -File -Filter '*_log.txt' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $t0.AddMinutes(-1) } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
         $lt = if ($log) { Get-Content $log.FullName -Raw -ErrorAction SilentlyContinue } else { '' }
-        $inst = @([regex]::Matches($lt, '(?im)^.*(install|extract|driver).*$') | ForEach-Object { Clean $_.Value } | Where-Object { $_ -match '(?i)install' } | Select-Object -Unique -First 80)
+        $inst = @([regex]::Matches($lt, '(?im)^.*(install|extract|driver).*$') | ForEach-Object { Clean $_.Value } | Where-Object { $_ -match '(?i)install' -and $_ -notmatch '^Command:' } | Select-Object -Unique -First 80)
         $m = [regex]::Match($lt, '(?i)(\d+) drivers? installed, (\d+) drivers? failed')
+        $selM = [regex]::Match($lt, '(?i)(\d+) drivers? selected')
         $txt = if ($finished) { 'завершён за {0:N0} мин' -f ((Get-Date) - $t0).TotalMinutes } else { "остановлен по тайм-ауту ($lim мин)" }
+        if ($selM.Success) { $txt += '; выбрано драйверов: ' + $selM.Groups[1].Value }
         $st = if ($finished) { 'ok' } else { 'warn' }
         if ($m.Success) {
             $okN = [int]$m.Groups[1].Value; $failN = [int]$m.Groups[2].Value
             $txt += '; установлено: {0}, ошибок: {1}' -f $okN, $failN
             if ($failN -gt 0) { $st = 'warn'; Add-Issue 'info' 'Драйверы' ("SDIO не смог установить драйверов: $failN") 'Обычно драйверпак не успел скачаться торрентом. Запустите программу ещё раз — скачанное сохраняется.' }
         } elseif ($finished -and $lt -notmatch '(?i)installing') { $txt += '; подходящих обновлений нет' }
+        if ($log) { $txt += ' (журнал: ' + $log.FullName + ')' }
         Add-Row $s 'Snappy Driver Installer' $txt $st
         if ($inst.Count) { Add-Table $s 'SDIO: журнал установки' ($inst | ForEach-Object { [pscustomobject]@{ 'Запись' = $_ } }) -Collapsed }
         if ($lt -match '(?i)reboot') { $G.RebootNeeded = $true }
     }
 
-    $null = pnputil /scan-devices 2>&1
-    Start-Sleep -Seconds 5
-    $after = @(CIM Win32_PnPEntity | Where-Object { $_.ConfigManagerErrorCode -and $_.ConfigManagerErrorCode -notin 0, 22, 24, 45 }).Count
-    Add-Row $s 'Проблемных устройств: до → после' ('{0} → {1}' -f $G.BadDevBefore, $after) $(if ($after -eq 0) { 'ok' } else { 'warn' })
+    # ---- 3. Что осталось без драйвера: ИД оборудования + прямая ссылка на поиск в каталоге Microsoft Update
+    if ($drvInst) { $null = pnputil /scan-devices 2>&1; Start-Sleep -Seconds 5 }
+    $badNow = @(CIM Win32_PnPEntity | Where-Object { $_.ConfigManagerErrorCode -and $_.ConfigManagerErrorCode -notin 0, 22, 24, 45 })
+    Add-Row $s 'Проблемных устройств: до → после' ('{0} → {1}' -f $G.BadDevBefore, $badNow.Count) $(if ($badNow.Count -eq 0) { 'ok' } else { 'warn' })
+    if ($badNow.Count) {
+        $hrows = @($badNow | Select-Object -First 25 | ForEach-Object {
+                $hw = "$(@($_.HardwareID)[0])"; if (-not $hw) { $hw = "$($_.PNPDeviceID)" }
+                $q = $hw
+                $mm = [regex]::Match($hw, '(?i)(VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}|VID_[0-9A-F]{4}&PID_[0-9A-F]{4})')
+                if ($mm.Success) { $q = $mm.Value }
+                [pscustomobject]@{ 'Устройство' = (Clean $_.Name); 'Код' = $_.ConfigManagerErrorCode; 'ИД оборудования' = $hw; 'Поиск драйвера' = ('https://www.catalog.update.microsoft.com/Search.aspx?q=' + [uri]::EscapeDataString($q)) } })
+        Add-Table $s 'Устройства без рабочего драйвера (ищите по ИД оборудования)' $hrows
+    }
     if ($G.RebootNeeded) { Add-Issue 'info' 'Драйверы' 'для завершения установки драйверов нужна перезагрузка' 'Перезагрузите компьютер.' }
-    if ($G.HasNvidia) { Add-Row $s 'Видеодрайвер' 'Самый свежий драйвер NVIDIA ставится через NVIDIA App (nvidia.com) — в пакетах драйверов он обычно старее.' }
+
+    # ---- 4. Самые свежие драйверы — от производителей (в Windows Update они часто старее)
+    $gpuNames = (@(CIM Win32_VideoController) | ForEach-Object { $_.Name }) -join '; '
+    $cpuMan = "$((CIM Win32_Processor | Select-Object -First 1).Manufacturer)"
+    $vrows = @()
+    if ($gpuNames -match 'NVIDIA') { $vrows += [pscustomobject]@{ 'Для чего' = 'Видеокарта NVIDIA'; 'Программа' = 'NVIDIA App'; 'Где взять' = 'https://www.nvidia.com/ru-ru/software/nvidia-app/' } }
+    if ($gpuNames -match 'AMD|Radeon') { $vrows += [pscustomobject]@{ 'Для чего' = 'Видеокарта AMD'; 'Программа' = 'AMD Software: Adrenalin Edition'; 'Где взять' = 'https://www.amd.com/ru/support/download/drivers.html' } }
+    if ($cpuMan -match 'AMD') { $vrows += [pscustomobject]@{ 'Для чего' = 'Чипсет AMD'; 'Программа' = 'AMD Chipset Drivers'; 'Где взять' = 'https://www.amd.com/ru/support/download/drivers.html' } }
+    if ($cpuMan -match 'Intel' -or $gpuNames -match 'Intel') { $vrows += [pscustomobject]@{ 'Для чего' = 'Чипсет / графика / Wi-Fi Intel'; 'Программа' = 'Intel Driver & Support Assistant'; 'Где взять' = 'https://www.intel.com/content/www/us/en/support/detect.html' } }
+    $vrows += [pscustomobject]@{ 'Для чего' = 'Материнская плата / ноутбук, BIOS'; 'Программа' = (Vendor-Tool); 'Где взять' = '' }
+    Add-Table $s 'Свежие драйверы от производителей' $vrows
     Add-Row $s 'BIOS' ('Обновления BIOS: ' + (Vendor-Tool))
 }
 
 # =====================================================================
 if ($G.MemDiag) {
     Step 'Планирование проверки памяти' {
+        # Средство проверки памяти Windows (memtest.efi) запускается загрузчиком ОДИН раз при следующей загрузке:
+        # bcdedit /bootsequence {memdiag} — то же, что делает mdsched.exe «проверить при следующем включении», но без окна.
+        # Режим по умолчанию — «Обычный» (2 прохода); «Расширенный» можно выбрать клавишей F1 на экране проверки
+        # (или заранее: bcdedit /set {memdiag} testmix extended — не меняем, расширенный идёт часами).
+        # BitLocker не мешает: memtest.efi запускается из Диспетчера загрузки Windows и диск не трогает.
+        $mdEnum = (bcdedit /enum '{memdiag}' 2>&1) -join "`n"
+        if ($mdEnum -notmatch '(?i)memtest') {
+            Warn 'в загрузчике нет средства проверки памяти Windows ({memdiag})'
+            Add-Issue 'info' 'Память' 'не удалось запланировать проверку памяти Windows (нет записи {memdiag} в загрузчике)' 'Проверьте память MemTest86 с загрузочной флешки.'
+            return
+        }
         $null = bcdedit /bootsequence '{memdiag}' 2>&1
-        if ($LASTEXITCODE -eq 0) { Ok 'проверка памяти запустится при следующей перезагрузке'; Add-Issue 'info' 'Память' 'запланирована полная проверка памяти при следующей перезагрузке' 'Результат покажет следующий запуск программы (раздел «Журналы ошибок»).' }
-        else { Warn 'не удалось запланировать — запустите mdsched.exe вручную' }
+        $mdSet = ((bcdedit /enum '{bootmgr}' 2>&1) -join "`n") -match '(?im)^bootsequence\s+.*\{memdiag\}'
+        if (-not $mdSet) {
+            Warn 'не удалось запланировать — запустите mdsched.exe вручную'
+            Add-Issue 'info' 'Память' 'не удалось запланировать проверку памяти Windows' 'Запустите mdsched.exe → «Выполнить перезагрузку и проверку».'
+            return
+        }
+        try {
+            if (-not (Test-Path 'HKCU:\Software\BigTechoTest')) { New-Item -Path 'HKCU:\Software\BigTechoTest' -Force | Out-Null }
+            Set-ItemProperty -Path 'HKCU:\Software\BigTechoTest' -Name MemDiagScheduled -Value ((Get-Date).ToString('o')) -ErrorAction Stop
+        } catch { $G.Log.Add("MemDiagScheduled: $($_.Exception.Message)") }
+        $G.MemDiagScheduled = $true
+        Ok 'проверка памяти запустится при следующей ПЕРЕЗАГРУЗКЕ (до загрузки Windows, ~20–40 мин)'
+        Add-Issue 'info' 'Память' 'запланирована проверка памяти Windows при следующей перезагрузке' 'Перезагрузите компьютер (именно «Перезагрузка», не «Завершение работы»): проверка пройдёт до загрузки Windows, ~20–40 мин (F1 на экране проверки — расширенный режим, дольше). Результат программа покажет при следующем запуске.'
     }
 }
 
@@ -2062,9 +2172,15 @@ Say ('Оценка состояния: {0}/100 — {1}' -f $score, $verdict) 'Wh
 Say ('Критичных проблем: {0}, требуют внимания: {1}, советов: {2}' -f $crit, $warn, $infoN) 'White'
 Say ('Отчёт сохранён: {0}' -f $out) 'Green'
 if ($sumOut) { Say ('Краткий итог для владельца: {0}' -f $sumOut) 'Green' }
+if ($G.MemDiagScheduled) { Say 'ПЕРЕЗАГРУЗИТЕ КОМПЬЮТЕР — проверка памяти пройдёт до загрузки Windows (~20–40 мин), результат программа покажет при следующем запуске. Нужна именно «Перезагрузка», не «Завершение работы».' 'Yellow' }
+if ($G.RemoteOn) { Remote-Finish ('Оценка {0}/100 · критично: {1}, внимание: {2}' -f $score, $crit, $warn) $score }
 if (-not $G.Auto) {
     if ($G.LiveOk) { Live-Finish ('Оценка {0}/100 · критично: {1}, внимание: {2}' -f $score, $crit, $warn) $score }
     Start-Process $(if ($sumOut) { $sumOut } else { $out })
-    if ($G.RebootNeeded) { if (AskYN 'Для завершения установки драйверов нужна перезагрузка. Перезагрузить сейчас?' 'N') { Restart-Computer -Force } }
+    if ($G.MemDiagScheduled) {
+        # bootsequence {memdiag} срабатывает только при загрузке через загрузчик: нужна именно «Перезагрузка»
+        if (AskYN 'Перезагрузить компьютер сейчас и начать проверку памяти (~20–40 мин, до загрузки Windows)?' 'N') { Restart-Computer -Force }
+    }
+    elseif ($G.RebootNeeded) { if (AskYN 'Для завершения установки драйверов нужна перезагрузка. Перезагрузить сейчас?' 'N') { Restart-Computer -Force } }
     [void](Read-Host 'Нажмите Enter для выхода')
 }

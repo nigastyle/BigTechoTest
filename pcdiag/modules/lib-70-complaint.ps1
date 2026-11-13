@@ -26,7 +26,7 @@ function Cx-Shut($Kind) {
 # найденные проблемы (crit/warn) по области и/или тексту
 function Cx-Iss($AreaRe, $TextRe = '', [switch]$AnySev) {
     $res = @()
-    foreach ($it in @($G.Issues)) {
+    foreach ($it in (AsArr $G.Issues)) {
         if (-not $it) { continue }
         if (-not $AnySev -and $it.Sev -notin 'crit', 'warn') { continue }
         if ($AreaRe -and ([string]$it.Area) -notmatch $AreaRe) { continue }

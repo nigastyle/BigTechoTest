@@ -50,7 +50,7 @@ function Get-DiskDanger {
         $letters = @(); if ($null -ne $num) { try { $letters = @(Get-Partition -DiskNumber $num -ErrorAction Stop | Where-Object { $_.DriveLetter } | ForEach-Object { "$($_.DriveLetter):" }) } catch {} }
         $res.Add([pscustomobject]@{ Number = $num; Name = "$($pd.FriendlyName)"; Letters = $letters; Level = $level; Reasons = @($reasons); SizeGB = [math]::Round([double]$pd.Size / 1GB) })
     }
-    return @($res)
+    return (AsArr $res)
 }
 
 function Get-RescueItems {

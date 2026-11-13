@@ -14,7 +14,7 @@ Step 'Видеокарта: тест видеопамяти' {
     while (-not $p.HasExited -and ((Get-Date) - $t0).TotalSeconds -lt 480) {
         Start-Sleep -Seconds 5
         $k = Read-Key; if ($null -ne $k.GpuTemp -and ($null -eq $tmax -or $k.GpuTemp -gt $tmax)) { $tmax = $k.GpuTemp }
-        if (Stop-Requested) { Write-Host ''; Warn 'тест остановлен: ТемпературныйНюхач обнаружил аномалию'; break }
+        if (Stop-Requested) { Write-Host ''; Warn (Stop-Text); break }
         $txt = ''; try { $fs = [IO.File]::Open($out, 'Open', 'Read', 'ReadWrite'); $txt = (New-Object IO.StreamReader($fs)).ReadToEnd(); $fs.Close() } catch {}
         if ($txt -match '(?m)^Standard 5-minute test (PASSed|fail)') { $verdict = $matches[1]; break }
         if ($txt -match '(?m)^Error found\.' -and ((Get-Date) - $t0).TotalSeconds -gt 60) { $verdict = 'fail'; break }

@@ -7,7 +7,7 @@ Step 'Накопители: полный SMART (smartctl)' {
     $devs = @(Get-SmartDevices -Refresh)
     if (-not $devs.Count) { Add-Row $s 'Накопители' 'smartctl не нашёл ни одного диска' 'warn'; return }
     function HasIssue($lbl, $re) {
-        foreach ($x in @($G.Issues)) {
+        foreach ($x in (AsArr $G.Issues)) {
             $t = "$($x.Text)"
             if ($lbl -and $t.IndexOf($lbl, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $t -match $re) { return $true }
         }

@@ -33,7 +33,7 @@ Step 'Вентиляторы: реакция на нагрузку' {
     while ([DiagCore]::IsRunning) {
         Start-Sleep -Seconds 3
         $k = Read-Key
-        if (Stop-Requested) { Write-Host ''; Warn 'тест остановлен: ТемпературныйНюхач обнаружил аномалию'; break }
+        if (Stop-Requested) { Write-Host ''; Warn (Stop-Text); break }
         if ($null -ne $k.CpuTemp -and ($null -eq $tmax -or $k.CpuTemp -gt $tmax)) { $tmax = [double]$k.CpuTemp }
         foreach ($x in @(Get-AllSensors)) {
             $key = "$($x.Hw)|$($x.Name)"

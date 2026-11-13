@@ -26,7 +26,7 @@ Step 'Блок питания: совместная нагрузка CPU + GPU' 
     while (((Get-Date) - $t0).TotalMinutes -lt $min) {
         Start-Sleep -Seconds 3
         $k = Read-Key; $L.Add($k)
-        if (Stop-Requested) { Write-Host ''; Warn 'тест остановлен: ТемпературныйНюхач обнаружил аномалию'; break }
+        if (Stop-Requested) { Write-Host ''; Warn (Stop-Text); break }
         $tot = 0; if ($k.CpuPower) { $tot += $k.CpuPower }; if ($k.GpuPower) { $tot += $k.GpuPower }
         Write-Host -NoNewline ("`r    {0,4:N0} с | CPU {1} °C | GPU {2} °C | CPU+GPU {3} Вт{4}   " -f ((Get-Date) - $t0).TotalSeconds, $(if ($null -ne $k.CpuTemp) { '{0:N0}' -f $k.CpuTemp } else { '—' }), $(if ($null -ne $k.GpuTemp) { '{0:N0}' -f $k.GpuTemp } else { '—' }), $(if ($tot) { '{0:N0}' -f $tot } else { '—' }), $(if ($k.V12) { ' | 12V {0:N2}' -f $k.V12 } else { '' }))
         if ($null -ne $k.CpuTemp -and $k.CpuTemp -ge 100) { $stop = 'температура процессора 100 °C'; break }
