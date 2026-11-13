@@ -401,10 +401,15 @@ function Nv-Latest($GpuName, $IsWin11) {
 }
 
 function Nv-Ver($Vc) {
+    # Версия установленного пакета драйвера (Windows) и версия загруженного в память драйвера (nvidia-smi):
+    # после установки до перезагрузки nvidia-smi ещё отдаёт старую — берём большую из двух.
+    $w = ''; $q = ''
+    if ("$($Vc.DriverVersion)" -match '^\d+\.\d+\.(\d+)\.(\d+)$') { $dg = ($Matches[1] + $Matches[2]); if ($dg.Length -ge 5) { $w = ($dg.Substring($dg.Length - 5, 3) + '.' + $dg.Substring($dg.Length - 2)) } }
     foreach ($pth in "$env:SystemRoot\System32\nvidia-smi.exe", "$env:ProgramFiles\NVIDIA Corporation\NVSMI\nvidia-smi.exe") {
-        if (Test-Path $pth) { try { $q = "$(& $pth --query-gpu=driver_version --format=csv,noheader 2>$null | Select-Object -First 1)".Trim(); if ($q -match '^\d+\.\d+$') { return $q } } catch {} }
+        if (Test-Path $pth) { try { $x = "$(& $pth --query-gpu=driver_version --format=csv,noheader 2>$null | Select-Object -First 1)".Trim(); if ($x -match '^\d+\.\d+$') { $q = $x; break } } catch {} }
     }
-    if ("$($Vc.DriverVersion)" -match '^\d+\.\d+\.(\d+)\.(\d+)$') { $dg = ($Matches[1] + $Matches[2]); if ($dg.Length -ge 5) { return ($dg.Substring($dg.Length - 5, 3) + '.' + $dg.Substring($dg.Length - 2)) } }
+    if ($w -and $q) { try { if ([version]$w -ge [version]$q) { return $w } else { return $q } } catch { return $w } }
+    if ($w) { return $w }; if ($q) { return $q }
     return "$($Vc.DriverVersion)"
 }
 
@@ -479,7 +484,13 @@ function Do-Nvidia {
         & $fail 'установщик не завершился за 25 мин (продолжает работу в фоне — дождитесь и перезагрузите)'; $S.Items.Add($it); return
     }
     $ec = $p.ExitCode
-    $nv = Nv-Ver (@(Get-Wmi Win32_VideoController | Where-Object { $_.Name -match '(?i)NVIDIA' }) | Select-Object -First 1)
+    # сразу после установки WMI ещё отдаёт старую версию — ждём до 30 с, пока появится новая
+    $nv = ''
+    for ($w = 0; $w -lt 6; $w++) {
+        $nv = Nv-Ver (@(Get-Wmi Win32_VideoController | Where-Object { $_.Name -match '(?i)NVIDIA' }) | Select-Object -First 1)
+        $cw = Parse-Ver $nv; if ($cw -and $b -and $cw -ge $b) { break }
+        Start-Sleep -Seconds 5
+    }
     Log ("NVIDIA setup код {0}, версия теперь {1}" -f $ec, $nv)
     $S.Reboot = $true
     $c2 = Parse-Ver $nv

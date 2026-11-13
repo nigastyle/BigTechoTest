@@ -1967,7 +1967,7 @@ Step 'Драйверы: установка и обновление' {
         }
         # сети нет и проверить нечем — копия в папке программы (там же, где сама программа)
         if (-not $dsPath -and -not $dsWant -and (Test-Path $dsLocal)) { $dsPath = $dsLocal; $dsUnverified = $true; $G.Log.Add('drvauto: манифест недоступен, используется tools\BTT-Drivers.ps1 без сверки') }
-    } else { $dsPath = $dsLocal }
+    } elseif (-not $dsPath) { $dsPath = $dsLocal }
     if (-not $dsPath) {
         if (-not $dsWhy) { $dsWhy = 'скрипт драйверов недоступен' }
         Warn ('автоустановка драйверов (каталог Microsoft, NVIDIA) пропущена: ' + $dsWhy)
@@ -1978,7 +1978,7 @@ Step 'Драйверы: установка и обновление' {
         $dsArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Mode {1} -Nvidia -OutJson "{2}" -LogFile "{3}" -Root "{4}"' -f $dsPath, $(if ($drvInst) { 'Install' } else { 'Search' }), $dsJson, $dsLog, $G.Root.TrimEnd('\')
         if ($drvInst -and -not $G.DrvRP) { $dsArgs += ' -RestorePoint'; $G.DrvRP = $true }
         if ($G.UpdFirmware) { $dsArgs += ' -Firmware' }
-        Info ('автоустановка драйверов: отдельное окно «BigTechoTest — драйверы» (до 40 мин){0}...' -f $(if ($dsUnverified) { ', без сверки (нет сети)' } else { '' }))
+        Info ('автоустановка драйверов: отдельное окно «BigTechoTest — драйверы» (до 40 мин){0}...' -f $(if ($CHANNEL -ne 'stable') { ', тестовая сборка' } elseif ($dsUnverified) { ', без сверки (нет сети)' } else { '' }))
         $dsT0 = Get-Date; $dsSeen = 0; $dsTimeout = $false
         try {
             $dsProc = Start-Process (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $dsArgs -WindowStyle Minimized -PassThru
@@ -1997,6 +1997,7 @@ Step 'Драйверы: установка и обновление' {
                 if (((Get-Date) - $dsT0).TotalMinutes -gt 40) { $dsTimeout = $true; try { $dsProc.Kill() } catch {}; break }
             }
         } catch { $G.Log.Add('drvauto: запуск: ' + $_.Exception.Message) }
+        try { $G.Log.Add(('drvauto: код выхода {0}, {1:N0} с; запуск: {2}' -f $dsProc.ExitCode, ((Get-Date) - $dsT0).TotalSeconds, $dsArgs)) } catch {}
         $dsRes = $null
         try { if (Test-Path $dsJson) { $dsRes = [IO.File]::ReadAllText($dsJson, [Text.Encoding]::UTF8) | ConvertFrom-Json } } catch { $G.Log.Add('drvauto: результат: ' + $_.Exception.Message) }
         if (-not $dsRes) {
