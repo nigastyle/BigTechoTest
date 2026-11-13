@@ -1,4 +1,5 @@
 # --- в репозитории только исходники программы BigTechoTest ---
+# служебные скрипты разработки и тестов (живут только на VDS)
 /*.ps1
 /winrun
 /shot.sh
@@ -7,14 +8,19 @@
 /runs/
 /shots/
 /ui-shots/
-/watch/*.log
+/watch/
+/btt-update-pub.xml
+# сборка
 exe/obj/
 exe/out/
 exe/*.png
 pcdiag/PC-Diagnostika.cmd
 pcdiag/README_crlf.txt
+pcdiag/ЧИТАЙ_МЕНЯ.txt
+# резервные копии и временное
 *.bak*
 *.tmp
+# секреты — никогда
 *.pem
 !btt-update-pub.pem
 secrets/
