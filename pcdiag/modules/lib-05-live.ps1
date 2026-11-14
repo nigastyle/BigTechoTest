@@ -97,7 +97,7 @@ public static class DiagLive {
     static readonly string[] StressProcs = { "prime95", "furmark", "y-cruncher", "linpack_xeon64", "memtest_vulkan", "tm5", "diskspd" };
 
     // Останавливает наши нагрузочные программы и внутренние тесты (DiagCore / DiagSurface, если есть)
-    internal static void StopAll() {
+    public static void StopAll() {
         StopRequested = true;
         try {
             foreach (Process pr in Process.GetProcesses()) {

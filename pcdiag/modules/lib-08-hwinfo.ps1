@@ -757,6 +757,26 @@ function Get-HwiRails {
     return $r
 }
 
+function Get-HwiCpu {
+    # Температура / мощность / частота процессора из HWiNFO: у него свой драйвер датчиков, поэтому показания есть и там,
+    # где LibreHardwareMonitor без драйвера PawnIO процессор не видит.
+    $r = @{ Temp = $null; Power = $null; Clock = $null }
+    if (-not $G.HwiOk -or -not ('DiagHwi' -as [type])) { return $r }
+    try {
+        $clk = New-Object System.Collections.Generic.List[double]
+        foreach ($x in [DiagHwi]::Read()) {
+            if ($null -eq $x.Value -or [double]::IsNaN([double]$x.Value)) { continue }
+            if ("$($x.Sensor)" -notmatch '^CPU \[#\d+\]') { continue }
+            $n = "$($x.Label)"; $v = [double]$x.Value
+            if ($x.Type -eq 1) { if ($n -match '^(CPU Package|CPU \(Tctl/Tdie\)|Core Max|CPU Die \(average\)|CPU IA Cores)$' -and $v -gt 5 -and $v -lt 126 -and ($null -eq $r.Temp -or $v -gt $r.Temp)) { $r.Temp = $v } }
+            elseif ($x.Type -eq 5) { if ($null -eq $r.Power -and $n -match '^CPU Package Power' -and $v -gt 0 -and $v -lt 1000) { $r.Power = $v } }
+            elseif ($x.Type -eq 6) { if ($n -match '^Core \d+ Clock' -and $v -gt 100 -and $v -lt 8000) { $clk.Add($v) } }
+        }
+        if ($clk.Count) { $r.Clock = [math]::Round(($clk | Measure-Object -Average).Average, 0) }
+    } catch {}
+    return $r
+}
+
 function Stop-HWiNFO {
     # После последнего стресс-теста: снимок всех датчиков и закрытие HWiNFO (только если запускали мы)
     if (-not ('DiagHwi' -as [type])) { return }

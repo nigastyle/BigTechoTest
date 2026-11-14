@@ -205,6 +205,22 @@ function Stop-Requested {
     if (Get-Command Guard-Tripped -ErrorAction SilentlyContinue) { return [bool](Guard-Tripped) }; return $false
 }
 function User-Stopped { return [bool](('DiagLive' -as [type]) -and [DiagLive]::StopRequested) }
+# Кнопка «Остановить тесты» должна прерывать ЛЮБОЙ шаг сразу, а не только нагрузочные тесты.
+# Шаг выполняется внутри цикла с меткой BTTSTEP (см. Step); «break BTTSTEP» из любой глубины вызовов выходит из шага,
+# и перехватить его try/catch внутри шага нельзя (блоки finally выполняются). Точки прерывания — любое ожидание (Start-Sleep)
+# и ожидание внешней программы (Run-Exe). На завершающем этапе (отчёт, разбор результатов) прерывание отключено.
+function Stop-StepNow { return [bool]($G.InStep -and -not $G.FinalPhase -and (User-Stopped)) }
+function Start-Sleep {
+    param([Parameter(Position = 0)][double]$Seconds = 0, [int]$Milliseconds = 0)
+    $left = [int]($Seconds * 1000) + $Milliseconds
+    while ($left -gt 0) {
+        if (Stop-StepNow) { break BTTSTEP }
+        $n = [math]::Min($left, 250)
+        Microsoft.PowerShell.Utility\Start-Sleep -Milliseconds $n
+        $left -= $n
+    }
+    if (Stop-StepNow) { break BTTSTEP }
+}
 function Step($Name, [scriptblock]$Body) {
     if ($G.Sel -and $STEPKEYS.ContainsKey($Name)) {
         $k = $STEPKEYS[$Name]
@@ -212,9 +228,8 @@ function Step($Name, [scriptblock]$Body) {
         if (-not $on) { [void]$G.Skipped.Add($Name); return }
     }
     if (User-Stopped) {
-        $isHeavy = $false
-        if (Get-Command Guard-IsStress -ErrorAction SilentlyContinue) { $isHeavy = [bool](Guard-IsStress $Name) }
-        elseif ($STEPKEYS.ContainsKey($Name) -and $G.GuardStress) { $isHeavy = ($G.GuardStress -contains $STEPKEYS[$Name]) }
+        # после «Стоп» пропускаются ВСЕ оставшиеся шаги; выполняется только завершающий этап (разбор собранного и отчёт)
+        $isHeavy = -not $G.FinalPhase
         if (-not $G.UserStopNoted) {
             $G.UserStopNoted = $true
             Add-Issue 'info' 'Стабильность' 'диагностика остановлена пользователем — часть тестов не выполнена' 'Повторите проверку полностью, когда будет время.'
@@ -234,13 +249,26 @@ function Step($Name, [scriptblock]$Body) {
     if ((Get-Command Guard-Before -ErrorAction SilentlyContinue) -and -not (Guard-Before $Name)) { if ($G.LiveOk) { Live-StepEnd $Name 'skip' }; return }   # ТемпературныйНюхач
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $bbOn = $G.BBStress -and $STEPKEYS.ContainsKey($Name) -and ($G.BBStress -contains $STEPKEYS[$Name]) -and (Get-Command BB-Start -ErrorAction SilentlyContinue)
-    try { if ($bbOn) { BB-Start $Name }; & $Body }
+    $stepCut = $true
+    $G.InStep = $true
+    try { :BTTSTEP do { if ($bbOn) { BB-Start $Name }; & $Body; $stepCut = $false } while ($false) }
     catch {
+        $stepCut = $false
         $liveErr = $true
         Add-Issue 'info' $Name ('часть проверки не выполнена: ' + $_.Exception.Message) 'Это не неисправность: просто не удалось собрать часть данных.'
         $G.Log.Add(($_ | Out-String))
     }
-    finally { if (Get-Command Guard-After -ErrorAction SilentlyContinue) { Guard-After $Name }; if ($bbOn) { BB-Stop } }
+    finally { $G.InStep = $false; if (Get-Command Guard-After -ErrorAction SilentlyContinue) { Guard-After $Name }; if ($bbOn) { BB-Stop } }
+    if ($stepCut) {
+        # шаг прерван кнопкой «Остановить тесты»: гасим нагрузочные программы, шаг помечаем пропущенным
+        try { if ('DiagLive' -as [type]) { [DiagLive]::StopAll() } } catch {}
+        Warn 'прервано: тесты остановлены пользователем'
+        if ($G.GuardSkipped) { [void]$G.GuardSkipped.Add($Name) }
+        if (-not $G.UserStopNoted) { $G.UserStopNoted = $true; Add-Issue 'info' 'Стабильность' 'диагностика остановлена пользователем — часть тестов не выполнена' 'Повторите проверку полностью, когда будет время.' }
+        if ($G.LiveOk) { Live-StepEnd $Name 'skip' }
+        if ($G.RemoteOn) { Remote-StepEnd $Name 'ok' }
+        return
+    }
     if ($G.LiveOk) { Live-StepEnd $Name $(if ($liveErr) { 'error' } else { Live-StateSince $liveN0 }) }
     if ($G.RemoteOn) { Remote-StepEnd $Name $(if ($liveErr) { 'error' } else { 'ok' }) }
     Say ('  (заняло {0:N0} с)' -f $sw.Elapsed.TotalSeconds) 'DarkGray'
@@ -278,7 +306,16 @@ function Run-Exe($File, $ArgLine, $TimeoutSec = 600, [switch]$Unicode, $WorkDir 
     $outTask = $p.StandardOutput.ReadToEndAsync()
     $errTask = $p.StandardError.ReadToEndAsync()
     $to = $false
-    if (-not $p.WaitForExit($TimeoutSec * 1000)) { try { $p.Kill() } catch {}; $to = $true }
+    $swx = [Diagnostics.Stopwatch]::StartNew()
+    while (-not $p.WaitForExit(300)) {
+        if ($swx.Elapsed.TotalSeconds -ge $TimeoutSec) { try { $p.Kill() } catch {}; $to = $true; break }
+        if (Stop-StepNow) {
+            # «Остановить тесты»: гасим программу вместе с дочерними процессами и выходим из шага
+            try { $null = & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /PID $p.Id /T /F 2>&1 } catch {}
+            try { if (-not $p.HasExited) { $p.Kill() } } catch {}
+            break BTTSTEP
+        }
+    }
     $p.WaitForExit()
     $o = $outTask.Result + "`n" + $errTask.Result
     return [pscustomobject]@{ Out = ($o -replace "`0", ''); Code = $p.ExitCode; TimedOut = $to }
@@ -409,6 +446,13 @@ function Read-Key {
         GpuClock = Pick $l '^Gpu' 'Clock' '^GPU Core'
         GpuLoad  = Pick $l '^Gpu' 'Load' '^GPU Core'
         GpuFan   = Pick $l '^Gpu' 'Fan' 'Fan' -Max
+    }
+    # нет датчиков процессора у LibreHardwareMonitor (не установлен PawnIO) — берём их из HWiNFO, если он запущен
+    if ($G.HwiOk -and (($null -eq $r.CpuTemp) -or -not $r.CpuPower -or ($null -eq $r.CpuClock)) -and (Get-Command Get-HwiCpu -ErrorAction SilentlyContinue)) {
+        $hc = Get-HwiCpu
+        if ($null -eq $r.CpuTemp -and $null -ne $hc.Temp) { $r.CpuTemp = $hc.Temp; $r.AcpiTemp = $null; $G.CpuTempSrc = 'HWiNFO' }
+        if (-not $r.CpuPower -and $null -ne $hc.Power) { $r.CpuPower = $hc.Power }
+        if ($null -eq $r.CpuClock -and $null -ne $hc.Clock) { $r.CpuClock = $hc.Clock }
     }
     if ($G.BB) { BB-Sample $r }
     if ($G.LiveOk) { Live-Sensors $r }
@@ -2026,7 +2070,10 @@ Step 'Драйверы: установка и обновление' {
             $dsItems = @($dsRes.items | Where-Object { $_ })
             $ra = @($dsItems | ForEach-Object { [pscustomobject]@{ 'Устройство' = $_.device; 'Было' = $_.was; 'Поставлено' = $_.installed; 'Источник' = $_.source; 'Результат' = $_.result } })
             if ($ra.Count) { Add-Table $s 'Автоустановка драйверов: результат' $ra }
-            $fa = @($dsItems | Where-Object { $_.link } | ForEach-Object { [pscustomobject]@{ 'Устройство' = $_.device; 'ИД оборудования' = $_.hwid; 'Где искать' = $_.link } })
+            # «не удалось узнать последнюю версию» — это не сбой установки, а несостоявшаяся проверка (нет связи с сайтом): в неудачи не считаем
+            $dsNoChk = @($dsItems | Where-Object { "$($_.result)" -match 'не удалось узнать последнюю версию' })
+            if ($dsNoChk.Count) { Add-Row $s 'Не проверено' ('свежесть драйвера не удалось проверить (нет связи с сайтом производителя): ' + (($dsNoChk | ForEach-Object { $_.device }) -join '; ')) 'warn' }
+            $fa = @($dsItems | Where-Object { $_.link -and "$($_.result)" -notmatch 'не удалось узнать последнюю версию' } | ForEach-Object { [pscustomobject]@{ 'Устройство' = $_.device; 'ИД оборудования' = $_.hwid; 'Где искать' = $_.link } })
             if ($fa.Count) {
                 Add-Table $s 'Не удалось установить автоматически — где искать вручную' $fa
                 Add-Issue 'info' 'Устройства' ('не удалось автоматически установить драйверов: {0}' -f $fa.Count) 'См. таблицу «Не удалось установить автоматически» в разделе драйверов — там ссылки на поиск.'
@@ -2073,6 +2120,8 @@ if ($G.MemDiag) {
     }
 }
 
+# завершающий этап: разбор собранного и отчёт — выполняется и после кнопки «Остановить тесты», прерывания шагов отключены
+$G.FinalPhase = $true
 #%%MOD:final%%
 
 # =====================================================================

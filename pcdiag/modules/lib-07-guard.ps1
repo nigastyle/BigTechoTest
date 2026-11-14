@@ -799,7 +799,7 @@ function Guard-PreCheck {
     $G.GuardPreChecked = $true
     if ($env:DIAG_NOGUARD) { return }
     $k = $null; try { $k = Read-Key } catch {}
-    $noCpu = (-not $G.LHM) -or -not (Guard-Init) -or ($null -eq $k) -or ($null -eq $k.CpuTemp)
+    $noCpu = (-not (Guard-Init)) -or ($null -eq $k) -or ($null -eq $k.CpuTemp)
     $gpuSel = $G.Sel -and ($G.Sel.gpu -or $G.Sel.vram -or $G.Sel.psu)
     $noGpu = $gpuSel -and (($null -eq $k) -or ($null -eq $k.GpuTemp))
     if (-not $noCpu -and -not $noGpu) { return }
@@ -827,6 +827,8 @@ function Guard-IsStress($Name) {
 function Guard-Before($Name) {
     # Вызывается из Step перед телом стресс-шага. $false — шаг пропустить.
     if (-not (Guard-IsStress $Name)) { return $true }
+    # HWiNFO запускаем ДО проверки датчиков: без PawnIO температуру процессора даёт только он
+    if ((Get-Command Start-HWiNFO -ErrorAction SilentlyContinue) -and -not $G.HwiStarted -and -not $G.GuardStopped) { $G.HwiStarted = $true; try { Start-HWiNFO } catch { $G.Log.Add('Start-HWiNFO: ' + $_.Exception.Message) } }
     Guard-PreCheck
     if ($G.GuardStopped) {
         Warn ('пропущено: тесты остановил ТемпературныйНюхач ({0})' -f $G.GuardStopReason)
