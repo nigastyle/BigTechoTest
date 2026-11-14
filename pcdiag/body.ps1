@@ -2275,7 +2275,26 @@ if ($imp.Count) { foreach ($i in $imp) { C ('<div class="p {0}"><div class="t">{
 else { C '<div style="color:var(--ok);font-weight:600">Серьёзных проблем не найдено — компьютер в хорошем состоянии.</div>' }
 $tips = @($G.Issues | Where-Object { $_.Sev -eq 'info' })
 if ($tips.Count) { C ('<div class="sub" style="margin-top:10px">Ещё советов: {0} — см. подробный отчёт.</div>' -f $tips.Count) }
-C '</div><div class="card"><h2>Конфигурация</h2><table>'
+C '</div>'
+# ---- обновление BIOS: файл уже скачан программой (lib-97-biosupd)
+if ($G.BiosUpd -and $G.BiosUpd.State -eq 'update') {
+    $bu = $G.BiosUpd
+    C '<div class="card"><h2>Обновление BIOS</h2>'
+    C ('<div class="p"><div class="t">BIOS устарел: установлена версия {0}, у производителя есть {1} от {2}</div>' -f (HE $bu.Inst), (HE $bu.NewVer), (HE (DT $bu.NewDate)))
+    if ($bu.Notes) { C ('<div class="f">Что нового: {0}</div>' -f (HE $bu.Notes)) }
+    C '</div>'
+    if ($bu.Folder) {
+        C ('<div><b>Файл для обновления уже скачан</b> — папка на рабочем столе:<br><a href="{0}">{1}</a></div>' -f (HE ([uri]$bu.Folder).AbsoluteUri), (HE (Split-Path $bu.Folder -Leaf)))
+        C '<div class="sub" style="margin-top:6px">Внутри — файл прошивки от производителя и пошаговая инструкция «КАК ОБНОВИТЬ BIOS.txt». Программа сама BIOS не прошивает: обновлять нужно при стабильном питании, не выключая компьютер.'
+        if ($bu.Kit) { C ' <b>В архиве готовый загрузочный комплект: копируется на флешку FAT32, прошивка запускается сама при загрузке с неё.</b>' }
+        elseif ($bu.Manual) { C ' <b>Эта версия ставится вручную из UEFI Shell — читайте инструкцию.</b>' }
+        C '</div>'
+    } else {
+        C ('<div>Скачать автоматически не получилось{0}. Страница модели у производителя: <a href="{1}">{2}</a></div>' -f $(if ($bu.Err) { ' (' + (HE $bu.Err) + ')' } else { '' }), (HE $bu.Page), (HE $bu.Page))
+    }
+    C '</div>'
+}
+C '<div class="card"><h2>Конфигурация</h2><table>'
 foreach ($k in 'Процессор', 'Оперативная память', 'Видеокарта', 'Накопители', 'Охлаждение процессора', 'Аккумулятор', 'Windows') { if ($G.Summary[$k]) { C ('<tr><td>{0}</td><td>{1}</td></tr>' -f (HE $k), (HE $G.Summary[$k])) } }
 C '</table></div>'
 C ('<div class="btns"><button class="btn pr" onclick="window.print()">Сохранить в PDF / печать</button><a class="btn" href="{0}">Подробный технический отчёт</a></div>' -f [uri]::EscapeDataString((Split-Path $out -Leaf)))
@@ -2297,6 +2316,10 @@ Say ('Оценка состояния: {0}/100 — {1}' -f $score, $verdict) 'Wh
 Say ('Критичных проблем: {0}, требуют внимания: {1}, советов: {2}' -f $crit, $warn, $infoN) 'White'
 Say ('Отчёт сохранён: {0}' -f $out) 'Green'
 if ($sumOut) { Say ('Краткий итог для владельца: {0}' -f $sumOut) 'Green' }
+if ($G.BiosUpd -and $G.BiosUpd.State -eq 'update') {
+    if ($G.BiosUpd.Folder) { Say ('BIOS УСТАРЕЛ: есть версия {0} от {1}. Файл для обновления и инструкция: {2}' -f $G.BiosUpd.NewVer, (DT $G.BiosUpd.NewDate), $G.BiosUpd.Folder) 'Yellow' }
+    else { Say ('BIOS УСТАРЕЛ: есть версия {0} от {1}. Скачать: {2}' -f $G.BiosUpd.NewVer, (DT $G.BiosUpd.NewDate), $G.BiosUpd.Page) 'Yellow' }
+}
 if ($G.MemDiagScheduled) { Say 'ПЕРЕЗАГРУЗИТЕ КОМПЬЮТЕР — проверка памяти пройдёт до загрузки Windows (~20–40 мин), результат программа покажет при следующем запуске. Нужна именно «Перезагрузка», не «Завершение работы».' 'Yellow' }
 if ($G.RemoteOn) { Remote-Finish ('Оценка {0}/100 · критично: {1}, внимание: {2}' -f $score, $crit, $warn) $score }
 if (-not $G.Auto) {
@@ -2309,5 +2332,9 @@ if (-not $G.Auto) {
         if (AskYN 'Перезагрузить компьютер сейчас и начать проверку памяти (~20–40 мин, до загрузки Windows)?' 'N') { Restart-Computer -Force }
     }
     elseif ($G.RebootNeeded) { if (AskYN 'Для завершения установки драйверов нужна перезагрузка. Перезагрузить сейчас?' 'N') { Restart-Computer -Force } }
+    if ($G.BiosUpd -and $G.BiosUpd.State -eq 'update' -and $G.BiosUpd.Folder) {
+        $bq = "BIOS этого компьютера устарел.`nУстановлена версия: {0}`nУ производителя есть: {1} от {2} (пропущено версий: {3})`n`nФайл для обновления уже скачан, рядом лежит инструкция «КАК ОБНОВИТЬ BIOS.txt».{4}`nПрограмма сама BIOS не прошивает.`n`nОткрыть папку с файлом обновления?" -f $G.BiosUpd.Inst, $G.BiosUpd.NewVer, (DT $G.BiosUpd.NewDate), $G.BiosUpd.Skipped, $(if ($G.BiosUpd.Manual) { "`nВНИМАНИЕ: эта версия ставится вручную из UEFI Shell — сначала прочитайте инструкцию." } else { '' })
+        if (AskYN $bq 'Y') { try { Start-Process explorer.exe ('"' + $G.BiosUpd.Folder + '"') } catch {} }
+    }
     if ($guiRun) { Live-WaitClosed } else { [void](Read-Host 'Нажмите Enter для выхода') }
 }

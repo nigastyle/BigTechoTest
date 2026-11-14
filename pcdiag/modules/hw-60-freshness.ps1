@@ -1,5 +1,5 @@
 # Свежесть драйверов и BIOS: сравнение установленных версий с последними у производителей (нужен интернет, каждый запрос до 15 с, сбой сети не ломает прогон).
-# NVIDIA — публичный lookup nvidia.com; AMD — страница загрузок (ориентировочно); ASUS — rog.asus.com API; MSI/Gigabyte/ASRock закрыты защитой от ботов — только возраст + ссылка.
+# NVIDIA — публичный lookup nvidia.com; AMD — страница загрузок (ориентировочно); BIOS — lib-97-biosupd (Colorful, ASUS, MSI, Gigabyte, Lenovo, HP, Dell): поиск версии, загрузка файла и инструкция; ASRock — только ссылка.
 Step 'Драйверы и BIOS: актуальность' {
     $s = New-Section 'Драйверы и BIOS: актуальность'
     $rows = New-Object System.Collections.Generic.List[object]
@@ -121,9 +121,11 @@ Step 'Драйверы и BIOS: актуальность' {
         Add-Issue 'info' 'Драйверы' ('драйверы Intel старше 2 лет: ' + (($oldIntel | Select-Object -First 4) -join '; ')) 'Обновите через Intel Driver & Support Assistant (intel.com/support) — обновления Wi-Fi/Bluetooth исправляют обрывы связи и уязвимости.'
     }
 
-    # ---------- BIOS
+    # ---------- BIOS: поиск обновления у производителя и загрузка файла (lib-97-biosupd)
     $bb = CIM Win32_BaseBoard | Select-Object -First 1
     $bios = CIM Win32_BIOS | Select-Object -First 1
+    $csx = CIM Win32_ComputerSystem | Select-Object -First 1
+    $cspx = CIM Win32_ComputerSystemProduct | Select-Object -First 1
     $bbMan = Clean $bb.Manufacturer; $bbMod = Clean $bb.Product
     $bver = Clean $bios.SMBIOSBIOSVersion
     $bdate = $null; if ($bios.ReleaseDate -is [datetime] -and $bios.ReleaseDate.Year -ge 1990) { $bdate = $bios.ReleaseDate }
@@ -132,29 +134,61 @@ Step 'Драйверы и BIOS: актуальность' {
     $bLink = Vendor-Tool
     $lastB = $dash; $bst = ''
     if ($bdate) { $bst = 'возраст ' + (Fresh-AgeText $bdate) }
-    $isAsus = ($bbMan -match '(?i)ASUS') -and -not $G.IsLaptop -and $bbMod
-    if ($isAsus) {
-        $lat = $null
-        try { $lat = Fresh-AsusBios $bbMod } catch { $G.Log.Add("freshness asus: $($_.Exception.Message)") }
-        if ($lat) {
-            $lastB = $lat.Version; if ($lat.Date) { $lastB = '{0} от {1}' -f $lat.Version, (DT $lat.Date) }
-            $bLink = $lat.Url
-            $iv = $null; if ($bver -match '(\d{3,5})') { $iv = [int]$Matches[1] }
-            $lv = $null; if ("$($lat.Version)" -match '^(\d{3,5})') { $lv = [int]$Matches[1] }
-            if ($iv -ne $null -and $lv -ne $null) {
-                if ($iv -ge $lv) { $bst = 'актуальный' }
-                else {
-                    $bst = 'доступна новая версия'
-                    $fix = ''; if ($lat.Description) { $fix = $lat.Description; if ($fix.Length -gt 160) { $fix = $fix.Substring(0, 160) + '...' } }
-                    $txt = 'доступна новая версия BIOS {0} (у вас {1})' -f $lastB, $bInst
-                    if ($fix) { $txt = $txt + '. Что изменилось: ' + $fix }
-                    Add-Issue 'info' 'BIOS' $txt ('Скачайте с ' + $bLink + '. Обновляйте при проблемах со стабильностью/совместимостью, только при стабильном питании (ИБП), не прерывая процесс.')
-                }
-            }
-        } else { $lastB = 'не удалось получить'; $bLink = 'asus.com/support' }
-    } elseif ($bbMan -match '(?i)MSI|Micro-Star') { $lastB = 'сайт защищён от проверки'; $bLink = 'msi.com/support (раздел BIOS вашей платы)' }
-    elseif ($bbMan -match '(?i)Gigabyte|AORUS') { $lastB = 'сайт защищён от проверки'; $bLink = 'gigabyte.com/Support (BIOS вашей платы)' }
-    elseif ($bbMan -match '(?i)ASRock') { $lastB = 'сайт защищён от проверки'; $bLink = 'asrock.com/support (BIOS вашей платы)' }
+    $blk = $false
+    try { $blv = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop; if ("$($blv.ProtectionStatus)" -eq 'On') { $blk = $true } } catch {}
+    $hwb = @{ BbMan = $bbMan; BbProd = $bbMod; BbVer = (Clean $bb.Version); CsMan = (Clean $csx.Manufacturer); CsModel = (Clean $csx.Model); CsFamily = (Clean $cspx.Version)
+        Sku = (Clean $csx.SystemSKUNumber); BiosVer = $bver; BiosDate = $bdate; IsLaptop = [bool]$G.IsLaptop; BitLocker = $blk }
+    $bres = $null; $bdec = $null
+    if ($FRESH.Fails -lt 3) {
+        Info 'ищу обновление BIOS на сайте производителя...'
+        try { $bres = Bios-Lookup $hwb; $bdec = Bios-Decide $bres $bver $bdate } catch { $G.Log.Add("biosupd: $($_.Exception.Message)") }
+    }
+    $ageIssue = [Predicate[object]] { param($i) $i.Area -eq 'BIOS' -and "$($i.Text)" -match '^прошивке BIOS' }
+    if ($bres -and $bres.Page) { $bLink = $bres.Page }
+    if ($bdec -and $bdec.State -eq 'update') {
+        $lat = $bdec.Latest
+        $lastB = '{0} от {1}' -f $lat.Version, (DT $lat.Date)
+        $bst = 'доступна новая версия'
+        $instTxt = $bInst; if ($bdec.Current -and (Bios-Norm $bdec.Current.Version) -ne (Bios-Norm $bver)) { $instTxt = '{0} (версия производителя {1})' -f $bInst, $bdec.Current.Version }
+        $lag = ''; if ($bdate) { $lag = ', отставание ' + (Fresh-AgeText ($now.AddDays(-(($lat.Date - $bdate).TotalDays)))) }
+        $notesRu = ''; if ($lat.Notes) { $notesRu = ((Bios-NoteRu $lat.Notes) -replace "`n", '; '); if ($notesRu.Length -gt 300) { $notesRu = $notesRu.Substring(0, 300) + '...' } }
+        $manual = (@($bdec.Newer | Where-Object { "$($_.Notes)" -match '(?i)UEFI\s*DOS' }).Count -gt 0)
+        $bf = $null
+        if ($env:DIAG_BIOSDL -ne '0') { try { $bf = Bios-Fetch $bres $lat $hwb $bdec } catch { $G.Log.Add("biosupd fetch: $($_.Exception.Message)") } }
+        [void]$G.Issues.RemoveAll($ageIssue)
+        $itxt = 'доступно обновление BIOS: версия {0} (установлена {1}{2}; пропущено версий: {3})' -f $lastB, $instTxt, $lag, @($bdec.Newer).Count
+        if ($bf -and $bf.Folder) {
+            $ifix = 'Файл обновления уже скачан: папка «{0}» на рабочем столе (внутри — файл прошивки и «КАК ОБНОВИТЬ BIOS.txt»). {1}Обновляйте при стабильном питании; на исправно работающем ПК обновление не обязательно.' -f (Split-Path $bf.Folder -Leaf), $(if ($manual) { 'ВНИМАНИЕ: по описанию производителя эта версия ставится вручную из UEFI Shell («UEFI DOS»). ' } else { '' })
+            Ok ('BIOS: скачано обновление {0} -> {1}' -f $lat.Version, $bf.Folder)
+        } else {
+            $ifix = 'Скачайте со страницы модели: ' + $bLink + $(if ($bf -and $bf.Err) { ' (автозагрузка не удалась: ' + $bf.Err + ')' } else { '' })
+        }
+        Add-Issue 'info' 'BIOS' $itxt $ifix
+        Add-Row $s 'Обновление BIOS' ('найдено: {0} {1}, версия {2}; установлена {3}' -f $bres.Vendor, $bres.Model, $lastB, $instTxt) 'warn'
+        if ($notesRu) { Add-Row $s 'Что нового в BIOS' $notesRu }
+        if ($bf -and $bf.Folder) {
+            Add-Row $s 'Файл обновления BIOS' ('{0} ({1} МБ) — {2}' -f $bf.File, $bf.SizeMb, $bf.Verified) 'ok'
+            Add-Row $s 'Как обновить BIOS' ('инструкция лежит рядом с файлом: «КАК ОБНОВИТЬ BIOS.txt». Программа сама BIOS не прошивает.' + $(if ($bf.Kit) { ' В архиве готовый загрузочный комплект: его содержимое копируется на флешку FAT32, прошивка стартует сама при загрузке с неё.' } elseif ($manual) { ' Версия ставится вручную из UEFI Shell.' } else { '' }))
+        } elseif ($bf -and $bf.Err) { Add-Row $s 'Файл обновления BIOS' ('не скачан: ' + $bf.Err + '. Страница модели: ' + $bLink) 'warn' }
+        $hist = @()
+        foreach ($hv in ($bdec.Newer | Sort-Object Date -Descending | Select-Object -First 20)) { $hist += [pscustomobject]@{ 'Версия' = $hv.Version; 'Дата' = (DT $hv.Date); 'Что изменилось' = ((Bios-NoteRu $hv.Notes) -replace "`n", '; ') } }
+        if ($hist.Count) { Add-Table $s 'Версии BIOS новее установленной' $hist -Collapsed }
+        $G.BiosUpd = @{ State = 'update'; Vendor = $bres.Vendor; Model = $bres.Model; Inst = $instTxt; NewVer = $lat.Version; NewDate = $lat.Date; Notes = $notesRu; Page = $bLink; Manual = $manual
+            Kit = $(if ($bf) { [bool]$bf.Kit } else { $false }); Folder = $(if ($bf) { $bf.Folder } else { '' }); File = $(if ($bf) { $bf.File } else { '' }); Err = $(if ($bf) { $bf.Err } else { '' }); Skipped = @($bdec.Newer).Count }
+    }
+    elseif ($bdec -and $bdec.State -eq 'current') {
+        $lat = $bdec.Latest
+        $lastB = '{0} от {1}' -f $lat.Version, (DT $lat.Date)
+        $bst = 'актуальный'
+        # BIOS последний из выпущенных — его возраст проблемой не является
+        [void]$G.Issues.RemoveAll($ageIssue)
+        $G.BiosUpd = @{ State = 'current'; Vendor = $bres.Vendor; Model = $bres.Model; NewVer = $lat.Version; NewDate = $lat.Date }
+        Ok ('BIOS актуален: установлена последняя версия производителя ({0})' -f $lastB)
+    }
+    elseif ($bres -and $bres.Why) {
+        $lastB = 'не определено: ' + $bres.Why
+        $G.Log.Add("biosupd: $($bres.Why)")
+    }
     & $addRow $bName $bInst $lastB $bst $bLink
 
     # ---------- Windows (только показать)
@@ -171,6 +205,6 @@ Step 'Драйверы и BIOS: актуальность' {
 
     if ($rows.Count) { Add-Table $s 'Актуальность драйверов и BIOS' $rows.ToArray() }
     if ($FRESH.Fails -ge 3) { Add-Row $s 'Интернет' 'недоступен или блокирует запросы — последние версии не проверены' 'warn' }
-    else { Add-Row $s 'Источники' 'NVIDIA (nvidia.com), AMD (amd.com, ориентировочно), ASUS (rog.asus.com). Наружу передаются только названия моделей, без серийных номеров.' }
+    else { Add-Row $s 'Источники' 'NVIDIA (nvidia.com), AMD (amd.com, ориентировочно), BIOS — сайт производителя платы/ноутбука. Наружу передаются только названия моделей, без серийных номеров.' }
     Add-Row $s 'Intel 13/14 поколения' 'проверка микрокода BIOS — в разделе «Известные дефекты железа и прошивок»'
 }
