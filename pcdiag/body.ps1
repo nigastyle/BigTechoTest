@@ -440,6 +440,18 @@ if ($env:DIAG_GUI -eq '1' -and -not $G.UiOk) {
     try { [void][System.Windows.Forms.MessageBox]::Show('Не удалось загрузить окна программы. Запустите BigTechoTest.cmd из папки программы.', 'BigTechoTest') } catch {}
     exit 1
 }
+# Значок BTT встроен в программу (не зависит от имени и наличия .exe) и ставится всем окнам; свой идентификатор приложения —
+# чтобы в панели задач был значок BTT, а не PowerShell.
+try {
+    if (-not (Test-Path $G.Temp)) { New-Item -ItemType Directory -Force $G.Temp | Out-Null }
+    $G.IconPath = Join-Path $G.Temp 'btt.ico'
+    [IO.File]::WriteAllBytes($G.IconPath, [Convert]::FromBase64String('%%APP_ICO_B64%%'))
+    $env:DIAG_ICON = $G.IconPath
+} catch { $G.IconPath = $null }
+if ($G.UiOk) {
+    try { [DiagUi]::SetAppId('BigTechnoClub.BigTechoTest') } catch {}
+    try { if ($G.IconPath) { [DiagChooser]::AppIcon = New-Object System.Drawing.Icon($G.IconPath) } } catch {}
+}
 # после перезагрузки с проверкой памяти Windows: показать её результат и дописать в готовый отчёт (lib-98-memresult), диагностика не запускается
 if ($env:DIAG_TOOL -eq 'memresult') { try { Invoke-MemResult } catch {}; exit }
 if ($G.UiOk -and -not $G.Auto) {
@@ -549,7 +561,7 @@ if ($G.Auto) {
             }
             [DiagChooser]::HistoryItems = $hist.ToArray()
         } catch {}
-        try { $ie = Join-Path $G.Root 'BigTechoTest.exe'; if (Test-Path $ie) { [DiagChooser]::AppIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($ie) } } catch {}
+        try { $ie = Join-Path $G.Root 'BigTechoTest.exe'; if (-not [DiagChooser]::AppIcon -and (Test-Path $ie)) { [DiagChooser]::AppIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($ie) } } catch {}
         $mi = @()
         try { $bb = CIM Win32_BaseBoard | Select-Object -First 1; if ($bb) { $mi += (Clean ("$($bb.Manufacturer) $($bb.Product)" -replace '(?i)Technology And Development Co\.,?\s*LTD|Co\.,?\s*Ltd\.?|Inc\.|Corporation|Computer', '')) } } catch {}
         try { $cp = CIM Win32_Processor | Select-Object -First 1; if ($cp) { $mi += (Clean ($cp.Name -replace '\(R\)|\(TM\)|CPU|Processor|\d+th Gen|\d+-Core', '')) } } catch {}

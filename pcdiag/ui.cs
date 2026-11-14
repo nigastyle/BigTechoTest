@@ -278,6 +278,9 @@ public class DiagInputForm : Form, IMessageFilter {
 }
 
 public static class DiagUi {
+    // свой идентификатор приложения: окна программы группируются в панели задач под значком BTT, а не под значком PowerShell
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern int SetCurrentProcessExplicitAppUserModelID(string id);
+    public static void SetAppId(string id) { try { SetCurrentProcessExplicitAppUserModelID(id); } catch (Exception) { } }
     static Form MakeOwner() {
         Form f = new Form();
         f.TopMost = true;

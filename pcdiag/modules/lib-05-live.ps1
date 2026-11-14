@@ -740,7 +740,12 @@ internal class LiveForm : Form, IMessageFilter {
     public LiveForm(string title) {
         if (!string.IsNullOrEmpty(title)) AppTitle = title;
         Text = AppTitle;
-        try { string ex = System.IO.Path.Combine(Environment.GetEnvironmentVariable("DIAG_ROOT") ?? "", "BigTechoTest.exe"); if (System.IO.File.Exists(ex)) { Icon = System.Drawing.Icon.ExtractAssociatedIcon(ex); ShowIcon = true; } } catch { }
+        try {
+            // значок BTT встроен в программу (body.ps1 кладёт его во временный файл DIAG_ICON); запасной вариант — значок из .exe
+            string ic = Environment.GetEnvironmentVariable("DIAG_ICON");
+            if (!string.IsNullOrEmpty(ic) && System.IO.File.Exists(ic)) { Icon = new System.Drawing.Icon(ic); ShowIcon = true; }
+            else { string ex = System.IO.Path.Combine(Environment.GetEnvironmentVariable("DIAG_ROOT") ?? "", "BigTechoTest.exe"); if (System.IO.File.Exists(ex)) { Icon = System.Drawing.Icon.ExtractAssociatedIcon(ex); ShowIcon = true; } }
+        } catch { }
         AutoScaleMode = AutoScaleMode.None;
         BackColor = LT.Bg;
         ForeColor = LT.Tx;

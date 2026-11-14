@@ -7,6 +7,10 @@ d=sys.argv[1]
 body=open(os.path.join(d,'body.ps1'),encoding='utf-8').read()
 body=body.replace('%%CORE_CS%%',open(os.path.join(d,'core.cs'),encoding='utf-8').read().rstrip('\n'))
 body=body.replace('%%UI_CS%%',open(os.path.join(d,'ui.cs'),encoding='utf-8').read().rstrip('\n'))
+# значок приложения (exe/app.ico) встраивается в сам скрипт
+import base64
+assert body.count('%%APP_ICO_B64%%')==1
+body=body.replace('%%APP_ICO_B64%%', base64.b64encode(open(os.path.join(d,'..','exe','app.ico'),'rb').read()).decode())
 # канал сборки: BTT_CHANNEL=test — предрелизная (не обновляется сама)
 ch=os.environ.get('BTT_CHANNEL','stable')
 assert body.count("$CHANNEL = 'stable'")==1
