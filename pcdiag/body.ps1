@@ -418,7 +418,7 @@ function Read-Key {
 
 #%%MOD:lib%%
 # служебные инструменты (флешка MemTest86, спасательная флешка WinPE): BigTechoTest.cmd с DIAG_TOOL=memtest86usb|rescueusb
-if ($env:DIAG_TOOL -and (Get-Command Invoke-DiagTool -ErrorAction SilentlyContinue)) { Invoke-DiagTool $env:DIAG_TOOL; exit }
+if ($env:DIAG_TOOL -and $env:DIAG_TOOL -ne 'memresult' -and (Get-Command Invoke-DiagTool -ErrorAction SilentlyContinue)) { Invoke-DiagTool $env:DIAG_TOOL; exit }
 
 # ---------------------------------------------------------------- C#-модули
 $csCore = @'
@@ -440,6 +440,8 @@ if ($env:DIAG_GUI -eq '1' -and -not $G.UiOk) {
     try { [void][System.Windows.Forms.MessageBox]::Show('Не удалось загрузить окна программы. Запустите BigTechoTest.cmd из папки программы.', 'BigTechoTest') } catch {}
     exit 1
 }
+# после перезагрузки с проверкой памяти Windows: показать её результат и дописать в готовый отчёт (lib-98-memresult), диагностика не запускается
+if ($env:DIAG_TOOL -eq 'memresult') { try { Invoke-MemResult } catch {}; exit }
 if ($G.UiOk -and -not $G.Auto) {
     # внезапное завершение из-за внутренней ошибки: показать окно, а не молча закрыться
     try {
@@ -2320,6 +2322,7 @@ if ($G.BiosUpd -and $G.BiosUpd.State -eq 'update') {
     if ($G.BiosUpd.Folder) { Say ('BIOS УСТАРЕЛ: есть версия {0} от {1}. Файл для обновления и инструкция: {2}' -f $G.BiosUpd.NewVer, (DT $G.BiosUpd.NewDate), $G.BiosUpd.Folder) 'Yellow' }
     else { Say ('BIOS УСТАРЕЛ: есть версия {0} от {1}. Скачать: {2}' -f $G.BiosUpd.NewVer, (DT $G.BiosUpd.NewDate), $G.BiosUpd.Page) 'Yellow' }
 }
+if ($G.MemDiagScheduled) { if (MemResult-Register $out $sumOut) { Say 'После перезагрузки и проверки памяти программа сама покажет результат и допишет его в этот отчёт.' 'White' } }
 if ($G.MemDiagScheduled) { Say 'ПЕРЕЗАГРУЗИТЕ КОМПЬЮТЕР — проверка памяти пройдёт до загрузки Windows (~20–40 мин), результат программа покажет при следующем запуске. Нужна именно «Перезагрузка», не «Завершение работы».' 'Yellow' }
 if ($G.RemoteOn) { Remote-Finish ('Оценка {0}/100 · критично: {1}, внимание: {2}' -f $score, $crit, $warn) $score }
 if (-not $G.Auto) {

@@ -46,6 +46,10 @@ namespace PCDiag
                 string exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
                 Environment.SetEnvironmentVariable("DIAG_ROOT", exeDir);
                 Environment.SetEnvironmentVariable("DIAG_GUI", "1");
+                // постоянный путь к самому .exe (нужен задаче «результат проверки памяти после перезагрузки»)
+                Environment.SetEnvironmentVariable("DIAG_EXE", Assembly.GetExecutingAssembly().Location);
+                string[] av = Environment.GetCommandLineArgs();
+                if (av.Length > 1 && av[1] == "--memresult") Environment.SetEnvironmentVariable("DIAG_TOOL", "memresult");
 
                 // own console, created hidden (STARTF_USESHOWWINDOW + SW_HIDE); the environment is inherited
                 string cmdExe = Path.Combine(Environment.SystemDirectory, "cmd.exe");
