@@ -219,7 +219,7 @@ public static class DiagLive {
             s.T1 = -1;
             curStep = s.Name;
             activity = "";
-            AddLog("▶ " + s.Name);
+            AddLog("► " + s.Name);
         }
     }
 
@@ -326,7 +326,7 @@ public static class DiagLive {
             activity = "";
             curStep = "";
             for (int i = 0; i < steps.Count; i++) if (steps[i].St == 1) { steps[i].St = 2; steps[i].T1 = Now(); }
-            AddLog("▶ Диагностика завершена. " + summary);
+            AddLog("► Диагностика завершена. " + summary);
             clock.Stop();
         }
         LiveForm f = form;
